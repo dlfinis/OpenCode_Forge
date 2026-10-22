@@ -36,8 +36,8 @@ dependencies {
 intellijPlatform {
     pluginConfiguration {
         ideaVersion {
-            sinceBuild = "242"
-            // No untilBuild - compatible with all future versions
+            sinceBuild = "252"
+            // No upper bound; revalidate against future platform releases.
         }
 
         changeNotes = """
@@ -47,6 +47,12 @@ intellijPlatform {
                 <li>Fix: Fixed the OpenCode CLI install command in README to match official download instructions.</li>
             </ul>
         """.trimIndent()
+    }
+
+    pluginVerification {
+        ides {
+            ide("IC", "2025.2.4")
+        }
     }
 }
 

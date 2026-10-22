@@ -3,12 +3,13 @@ package ai.opencode.ide.jetbrains.api.models
 import com.google.gson.*
 import java.lang.reflect.Type
 
-data class FileDiff(
+data class FileDiff @JvmOverloads constructor(
     val file: String,
     val before: String,
     val after: String,
     val additions: Int,
-    val deletions: Int
+    val deletions: Int,
+    val status: String = "modified"
 )
 
 /**
@@ -25,19 +26,79 @@ data class FileDiff(
 class FileDiffDeserializer : JsonDeserializer<FileDiff> {
     override fun deserialize(json: JsonElement, typeOfT: Type, context: JsonDeserializationContext): FileDiff {
         val obj = json.asJsonObject
-        
+        val patch = obj.get("patch")?.takeIf { it.isJsonPrimitive }?.asString.orEmpty()
+        val parsedPatch = parseUnifiedPatch(patch)
+        val hasBefore = obj.has("before") && !obj.get("before").isJsonNull
+        val hasAfter = obj.has("after") && !obj.get("after").isJsonNull
+
         return FileDiff(
             file = decodeGoQuotedString(obj.get("file")?.asString ?: ""),
-            // before 和 after 字段是普通 JSON 字符串，不需要 decodeGoQuotedString 解码
-            // 否则会导致：
-            // 1. 内容首尾的双引号被错误去除
-            // 2. 内容中的反斜杠被错误转义 (e.g. "\\n" -> "\n")
-            before = obj.get("before")?.asString ?: "",
-            after = obj.get("after")?.asString ?: "",
+            before = if (hasBefore) obj.get("before").asString else parsedPatch.before,
+            after = if (hasAfter) obj.get("after").asString else parsedPatch.after,
             additions = obj.get("additions")?.asInt ?: 0,
-            deletions = obj.get("deletions")?.asInt ?: 0
+            deletions = obj.get("deletions")?.asInt ?: 0,
+            status = obj.get("status")?.takeIf { it.isJsonPrimitive }?.asString ?: "modified"
         )
     }
+
+    private fun parseUnifiedPatch(patch: String): ParsedPatch {
+        if (patch.isEmpty()) return ParsedPatch("", "")
+
+        val before = mutableListOf<String>()
+        val after = mutableListOf<String>()
+        var beforeHasNoFinalNewline = false
+        var afterHasNoFinalNewline = false
+        var previousLineKind: Char? = null
+
+        patch.lineSequence().forEach { rawLine ->
+            val line = rawLine.removeSuffix("\r")
+            when {
+                line.startsWith("\\ No newline at end of file") -> {
+                    when (previousLineKind) {
+                        ' ' -> {
+                            beforeHasNoFinalNewline = true
+                            afterHasNoFinalNewline = true
+                        }
+                        '-' -> beforeHasNoFinalNewline = true
+                        '+' -> afterHasNoFinalNewline = true
+                    }
+                }
+                line.startsWith("@@") || line.startsWith("--- ") || line.startsWith("+++ ") ||
+                    line.startsWith("diff ") || line.startsWith("index ") || line.startsWith("new file mode ") ||
+                    line.startsWith("deleted file mode ") || line.startsWith("similarity index ") ||
+                    line.startsWith("rename from ") || line.startsWith("rename to ") -> previousLineKind = null
+                line.startsWith(" ") -> {
+                    val content = line.substring(1)
+                    before.add(content)
+                    after.add(content)
+                    beforeHasNoFinalNewline = false
+                    afterHasNoFinalNewline = false
+                    previousLineKind = ' '
+                }
+                line.startsWith("-") -> {
+                    before.add(line.substring(1))
+                    beforeHasNoFinalNewline = false
+                    previousLineKind = '-'
+                }
+                line.startsWith("+") -> {
+                    after.add(line.substring(1))
+                    afterHasNoFinalNewline = false
+                    previousLineKind = '+'
+                }
+                else -> previousLineKind = null
+            }
+        }
+
+        fun content(lines: List<String>, hasNoFinalNewline: Boolean): String = when {
+            lines.isEmpty() -> ""
+            hasNoFinalNewline -> lines.joinToString("\n")
+            else -> lines.joinToString("\n") + "\n"
+        }
+
+        return ParsedPatch(content(before, beforeHasNoFinalNewline), content(after, afterHasNoFinalNewline))
+    }
+
+    private data class ParsedPatch(val before: String, val after: String)
     
     companion object {
         /**

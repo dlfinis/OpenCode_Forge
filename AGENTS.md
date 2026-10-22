@@ -8,7 +8,7 @@ This document provides strict guidelines and useful context for AI agents (and h
 - **Type**: IntelliJ Platform Plugin
 - **Language**: Kotlin (JDK 17)
 - **Build System**: Gradle (Kotlin DSL)
-- **Target Platform**: IntelliJ IDEA 2024.2+ (Since Build 242)
+- **Target Platform**: IntelliJ IDEA 2025.2+ (Since Build 252)
 - **Version**: 1.0.4+ (See `build.gradle.kts`)
 
 ### Core Dependencies

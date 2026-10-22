@@ -17,10 +17,11 @@ import ai.opencode.ide.jetbrains.util.ProcessAuthDetector
 import ai.opencode.ide.jetbrains.web.OpenCodeWebVirtualFile
 import ai.opencode.ide.jetbrains.web.WebModeSupport
 
-import com.google.gson.JsonElement
 import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.execution.process.CapturingProcessHandler
 import com.intellij.execution.process.OSProcessHandler
+import com.intellij.execution.process.ProcessAdapter
+import com.intellij.execution.process.ProcessEvent
 import com.intellij.notification.Notification
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
@@ -66,6 +67,7 @@ class OpenCodeService(private val project: Project) : Disposable {
     private var password: String? = null
     private var apiClient: OpenCodeApiClient? = null
     private var sseListener: SseEventListener? = null
+    @Volatile private var localServerProcess: OSProcessHandler? = null
     private val isConnected = AtomicBoolean(false)
     private val isConnecting = AtomicBoolean(false)
     private var lastMode: ConnectionMode = ConnectionMode.NONE
@@ -83,11 +85,14 @@ class OpenCodeService(private val project: Project) : Disposable {
     
     // Turn state: keyed by sessionId
     private val turnMessageIds = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val pendingUserMessageIds = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val turnPendingPayloads = java.util.concurrent.ConcurrentHashMap<String, List<FileDiff>>()
     private val turnSnapshots = java.util.concurrent.ConcurrentHashMap<String, TurnSnapshot>()
     private val turnIdleWaiting = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
     private val turnBarrierTasks = java.util.concurrent.ConcurrentHashMap<String, ScheduledFuture<*>>()
     private val turnLastTriggerTimes = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val activeSessionIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val turnIdleHandled = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     val sessionManager: SessionManager get() = _sessionManager ?: project.service()
     private val diffViewerService: DiffViewerService get() = _diffViewerService ?: project.service()
@@ -95,6 +100,7 @@ class OpenCodeService(private val project: Project) : Disposable {
     // Test hooks
     private var _sessionManager: SessionManager? = null
     private var _diffViewerService: DiffViewerService? = null
+    internal var terminalDraftWriterForTests: ((String) -> Boolean)? = null
 
     internal fun setTestDeps(sm: SessionManager, dvs: DiffViewerService, client: OpenCodeApiClient) {
         _sessionManager = sm
@@ -154,22 +160,28 @@ class OpenCodeService(private val project: Project) : Disposable {
         if (text.isBlank() || project.isDisposed) return
         if (apiClient == null && terminalEditor == null) { ApplicationManager.getApplication().invokeLater { Messages.showInfoMessage(project, "OpenCode not running.", "OpenCode") }; return }
         schedulePasteAttempt(text, 20, 100L)
-        ApplicationManager.getApplication().invokeLater { focusTerminalUI() }
+        ApplicationManager.getApplication().invokeLater {
+            if (terminalDraftWriterForTests != null) return@invokeLater
+            if (terminalVirtualFile == null) {
+                val activePort = port ?: return@invokeLater
+                createTerminalUIInternal(hostname, activePort, password, false)
+            } else {
+                focusTerminalUI()
+            }
+        }
     }
 
     fun pasteToTerminal(text: String): Boolean {
         if (text.isBlank()) return false
-        apiClient?.let { client -> 
-            AppExecutorUtil.getAppExecutorService().submit { 
-                try { 
-                    if (!client.tuiAppendPrompt(text)) logger.warn("[Paste] API failed to append prompt")
-                } catch (e: Exception) { 
-                    logger.warn("[Paste] API error: ${e.message}") 
-                } 
-            }
-            return true 
+        terminalDraftWriterForTests?.let { return it(text) }
+        val widget = terminalEditor?.terminalWidget ?: return false
+        return try {
+            widget.executeWithTtyConnector { connector -> connector.write(text) }
+            true
+        } catch (e: Exception) {
+            logger.warn("[Paste] Failed to insert context into the terminal draft", e)
+            false
         }
-        return false
     }
 
     fun addConnectionListener(listener: (Boolean) -> Unit) {
@@ -194,50 +206,32 @@ class OpenCodeService(private val project: Project) : Disposable {
                 val sId = event.properties.sessionID
                 val status = event.properties.status
                 if (status.isBusy()) {
-                    val started = sessionManager.onTurnStart()
-                    if (started) clearTurnState(sId)
-                } else if (status.isIdle()) {
-                    // Capture snapshot BEFORE attempting barrier
-                    val snapshot = sessionManager.onTurnEnd()
-                    if (snapshot != null) {
-                        turnSnapshots[sId] = snapshot
-                        logger.info("[OpenCode] Turn #${snapshot.turnNumber} snapshot captured")
-                        sendNotification(
-                            "OpenCode Task Completed",
-                            "Session is now idle. Checking for changes...",
-                            replacePrevious = true
-                        )
+                    if (activeSessionIds.add(sId)) {
+                        val pendingMessageId = pendingUserMessageIds.remove(sId)
+                        val started = sessionManager.onTurnStart()
+                        if (started) clearTurnState(sId)
+                        if (pendingMessageId != null) turnMessageIds[sId] = pendingMessageId
+                        turnIdleHandled.remove(sId)
                     }
-                    turnIdleWaiting[sId] = true
-                    attemptBarrierTrigger(sId)
+                } else if (status.isIdle()) {
+                    handleSessionIdle(sId, "status event")
                 }
             }
             is SessionIdleEvent -> {
-                val sId = event.properties.sessionID
-                val snapshot = sessionManager.onTurnEnd()
-                if (snapshot != null) {
-                    turnSnapshots[sId] = snapshot
-                    logger.info("[OpenCode] Turn #${snapshot.turnNumber} snapshot captured (via idle event)")
-                    sendNotification(
-                        "OpenCode Task Completed",
-                        "Session is now idle. Checking for changes...",
-                        replacePrevious = true
-                    )
-                }
-                turnIdleWaiting[sId] = true
-                attemptBarrierTrigger(sId)
+                handleSessionIdle(event.properties.sessionID, "idle event")
             }
             is FileEditedEvent -> sessionManager.onFileEdited(event.properties.file)
             is MessageUpdatedEvent -> {
                 val info = event.properties.info
-                if (info.role == null || info.role == "assistant") {
-                    recordTurnMessageId(info.sessionID, info.id)
+                val sessionId = event.properties.sessionID ?: info.sessionID
+                if ((info.role ?: info.type) == "user" && sessionId != null) {
+                    pendingUserMessageIds[sessionId] = info.id
+                    if (activeSessionIds.contains(sessionId)) {
+                        pendingUserMessageIds.remove(sessionId, info.id)
+                        recordTurnUserMessageId(sessionId, info.id)
+                    }
                 }
             }
-            is MessagePartUpdatedEvent -> extractPartMessageInfo(event.properties.part)?.let { 
-                recordTurnMessageId(it.sessionId, it.messageId) 
-            }
-            is CommandExecutedEvent -> recordTurnMessageId(event.properties.sessionID, event.properties.messageID)
             is SessionDiffEvent -> if (event.properties.diff.isNotEmpty()) {
                 turnPendingPayloads[event.properties.sessionID] = event.properties.diff
                 attemptBarrierTrigger(event.properties.sessionID)
@@ -249,6 +243,7 @@ class OpenCodeService(private val project: Project) : Disposable {
     private fun clearTurnState(sessionId: String) {
         val oldSnapshot = turnSnapshots.remove(sessionId)
         turnMessageIds.remove(sessionId)
+        pendingUserMessageIds.remove(sessionId)
         turnPendingPayloads.remove(sessionId)
         turnIdleWaiting.remove(sessionId)
         turnBarrierTasks.remove(sessionId)?.cancel(false)
@@ -261,11 +256,32 @@ class OpenCodeService(private val project: Project) : Disposable {
         }
     }
 
-    private fun recordTurnMessageId(sessionId: String, messageId: String) {
+    private fun handleSessionIdle(sessionId: String, source: String) {
+        if (!turnIdleHandled.add(sessionId)) return
+        activeSessionIds.remove(sessionId)
+
+        // Capture snapshot BEFORE attempting the diff barrier.
+        val snapshot = sessionManager.onTurnEnd()
+        if (snapshot != null) {
+            turnSnapshots[sessionId] = snapshot
+            logger.info("[OpenCode] Turn #${snapshot.turnNumber} snapshot captured ($source)")
+        }
+        turnIdleWaiting[sessionId] = true
+        attemptBarrierTrigger(sessionId)
+        if (snapshot != null) {
+            sendNotification(
+                "OpenCode Task Completed",
+                "Session is now idle. Checking for changes...",
+                replacePrevious = true
+            )
+        }
+    }
+
+    private fun recordTurnUserMessageId(sessionId: String, messageId: String) {
         if (turnMessageIds.containsKey(sessionId)) return
         turnMessageIds[sessionId] = messageId
         val turnNum = turnSnapshots[sessionId]?.turnNumber ?: sessionManager.getCurrentTurnNumber()
-        logger.info("[OpenCode] Turn #$turnNum MessageID: $messageId")
+        logger.info("[OpenCode] Turn #$turnNum UserMessageID: $messageId")
         attemptBarrierTrigger(sessionId)
     }
 
@@ -339,19 +355,19 @@ class OpenCodeService(private val project: Project) : Disposable {
     private fun fetchAndShowDiffs(sessionId: String, snapshot: TurnSnapshot) {
         val client = apiClient ?: return
         val path = project.basePath ?: return
-        val messageId = turnMessageIds[sessionId]
+        val userMessageId = turnMessageIds[sessionId]
         val payload = turnPendingPayloads[sessionId]
         
-        logger.info("[OpenCode] Turn #${snapshot.turnNumber} fetchAndShowDiffs: messageId=$messageId, payloadSize=${payload?.size ?: 0}")
+        logger.info("[OpenCode] Turn #${snapshot.turnNumber} fetchAndShowDiffs: userMessageId=$userMessageId, payloadSize=${payload?.size ?: 0}")
         
         AppExecutorUtil.getAppExecutorService().submit {
             try {
                 var diffs: List<FileDiff> = emptyList()
                 
-                // Priority 1: Fetch by messageId (most accurate)
-                if (messageId != null) {
-                    logger.info("[OpenCode] Turn #${snapshot.turnNumber} Fetching diffs for messageId: $messageId")
-                    diffs = client.getSessionDiff(sessionId, path, messageId)
+                // V2 `from` refers to the user message that started this turn.
+                if (userMessageId != null) {
+                    logger.info("[OpenCode] Turn #${snapshot.turnNumber} Fetching diffs from user message: $userMessageId")
+                    diffs = client.getSessionDiff(sessionId, path, userMessageId)
                     logger.info("[OpenCode] Turn #${snapshot.turnNumber} Server returned ${diffs.size} diffs: ${diffs.map { "${it.file}(+${it.additions}/-${it.deletions})" }}")
                 }
                 
@@ -360,11 +376,10 @@ class OpenCodeService(private val project: Project) : Disposable {
                     logger.info("[OpenCode] Turn #${snapshot.turnNumber} Using SSE payload (${payload.size} files): ${payload.map { it.file }}")
                     diffs = payload
                 }
-                
-                // Priority 3: Fallback to session summary (last resort)
-                if (diffs.isEmpty() && messageId == null) {
-                    logger.warn("[OpenCode] Turn #${snapshot.turnNumber} No messageId or payload, trying session summary")
-                    client.getSession(sessionId, path)?.summary?.diffs?.let { diffs = it }
+
+                if (diffs.isEmpty() && userMessageId == null && payload == null) {
+                    logger.warn("[OpenCode] Turn #${snapshot.turnNumber} No user message ID or SSE payload; trying the latest session diff")
+                    diffs = client.getSessionDiff(sessionId, path)
                 }
                 
                 // 1. Force VFS refresh for Server files and Known files BEFORE processing
@@ -449,7 +464,43 @@ class OpenCodeService(private val project: Project) : Disposable {
     }
 
     private fun connectToSse() {
-        sseListener?.disconnect(); apiClient?.let { sseListener = it.createEventListener(project.basePath!!, { handleEvent(it) }, { updateConnectionState(false) }, { updateConnectionState(true) }, { updateConnectionState(false) }).apply { connect() } }
+        sseListener?.disconnect()
+        val path = project.basePath ?: return
+        apiClient?.let { client ->
+            sseListener = client.createEventListener(
+                path,
+                { handleEvent(it) },
+                { updateConnectionState(false) },
+                {
+                    updateConnectionState(true)
+                    reconcileSessionStatuses(client, path)
+                },
+                { updateConnectionState(false) }
+            ).apply { connect() }
+        }
+    }
+
+    private fun reconcileSessionStatuses(client: OpenCodeApiClient, path: String) {
+        AppExecutorUtil.getAppExecutorService().submit {
+            val statuses = client.getActiveSessionStatuses(path) ?: return@submit
+            val activeNow = statuses.filter { it.status.isBusy() }.mapTo(mutableSetOf()) { it.sessionID }
+            val previouslyActive = activeSessionIds.toSet()
+
+            (activeNow - previouslyActive).forEach { sessionId ->
+                handleEvent(
+                    SessionStatusEvent(
+                        properties = SessionStatusProperties(sessionId, SessionStatusType("running"))
+                    )
+                )
+            }
+            (previouslyActive - activeNow).forEach { sessionId ->
+                handleEvent(
+                    SessionStatusEvent(
+                        properties = SessionStatusProperties(sessionId, SessionStatusType("idle"))
+                    )
+                )
+            }
+        }
     }
 
     private fun updateConnectionState(connected: Boolean) { if (isConnected.getAndSet(connected) != connected) connectionListeners.forEach { it(connected) } }
@@ -461,20 +512,28 @@ class OpenCodeService(private val project: Project) : Disposable {
     ) {
         val time = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
         val message = "[$time] $content"
-        invokeLater {
-            if (project.isDisposed) return@invokeLater
-            if (replacePrevious) lastIdleNotification?.expire()
-            val notification = NotificationGroupManager.getInstance()
-                .getNotificationGroup("OpenCode")
-                .createNotification(title, message, type)
-                .setImportant(true)
-            if (replacePrevious) lastIdleNotification = notification
-            notification.notify(project)
-            try {
-                SystemNotifications.getInstance().notify("OpenCode", title, message)
-            } catch (e: Throwable) {
-                logger.debug("[OpenCode] System notification failed: ${e.message}")
+        try {
+            invokeLater {
+                try {
+                    if (project.isDisposed) return@invokeLater
+                    if (replacePrevious) lastIdleNotification?.expire()
+                    val notification = NotificationGroupManager.getInstance()
+                        .getNotificationGroup("OpenCode")
+                        .createNotification(title, message, type)
+                        .setImportant(true)
+                    if (replacePrevious) lastIdleNotification = notification
+                    notification.notify(project)
+                    try {
+                        SystemNotifications.getInstance().notify("OpenCode", title, message)
+                    } catch (e: Throwable) {
+                        logger.debug("[OpenCode] System notification failed: ${e.message}")
+                    }
+                } catch (e: Throwable) {
+                    logger.warn("[OpenCode] Notification unavailable; event processing will continue", e)
+                }
             }
+        } catch (e: Throwable) {
+            logger.warn("[OpenCode] Notification unavailable; event processing will continue", e)
         }
     }
 
@@ -482,7 +541,8 @@ class OpenCodeService(private val project: Project) : Disposable {
 
     private fun disconnectAndReset() {
         connectionManagerTask?.cancel(true); sseListener?.disconnect(); isConnected.set(false); isConnecting.set(false)
-        turnMessageIds.clear(); turnPendingPayloads.clear(); turnSnapshots.clear(); turnIdleWaiting.clear(); turnBarrierTasks.values.forEach { it.cancel(false) }; turnBarrierTasks.clear()
+        turnMessageIds.clear(); pendingUserMessageIds.clear(); turnPendingPayloads.clear(); turnSnapshots.clear(); turnIdleWaiting.clear();
+        activeSessionIds.clear(); turnIdleHandled.clear(); turnBarrierTasks.values.forEach { it.cancel(false) }; turnBarrierTasks.clear()
         terminateProcess()
         terminalVirtualFile?.let { OpenCodeTerminalFileEditorProvider.disposeWidget(it, null) }
         terminalVirtualFile = null; terminalEditor = null; webVirtualFile = null; port = null; hostname = "127.0.0.1"; apiClient = null
@@ -490,6 +550,16 @@ class OpenCodeService(private val project: Project) : Disposable {
 
     private fun terminateProcess() {
         try {
+            val serverHandler = localServerProcess
+            localServerProcess = null
+            if (serverHandler != null) {
+                serverHandler.destroyProcess()
+                val serverProcess = serverHandler.process
+                if (serverProcess.isAlive && !serverProcess.waitFor(2, TimeUnit.SECONDS)) {
+                    serverProcess.destroyForcibly()
+                }
+            }
+
             val process = terminalEditor?.terminalWidget?.processTtyConnector?.process
             if (process?.isAlive == true) {
                 process.destroy()
@@ -565,13 +635,14 @@ class OpenCodeService(private val project: Project) : Disposable {
 
     private fun connectToExistingServer(h: String, p: Int, a: ProcessAuthDetector.ServerAuth, ui: Boolean, web: Boolean, customBasePath: String? = null) {
         hostname = h; port = p; username = a.username; password = a.password
-        if (ui) { if (web) createWebUI(h, p) else createTerminalUIInternal(h, p, a.password, false, null, customBasePath) }
+        if (ui) { if (web) createWebUI(h, p) else createTerminalUIInternal(h, p, a.password, false, customBasePath) }
         else { ApplicationManager.getApplication().invokeLater { Messages.showInfoMessage(project, "Connected to $h:$p", "OpenCode") } }
         initializeApiClient(h, p); startConnectionManager()
     }
 
     private fun createWebUI(h: String, p: Int) {
-        webVirtualFile = WebModeSupport.openWebTab(project, h, p, password) { if (webVirtualFile == null) terminateProcess() }
+        val connectHost = if (h == "0.0.0.0") "127.0.0.1" else h
+        webVirtualFile = WebModeSupport.openWebTab(project, connectHost, p, password) { if (webVirtualFile == null) terminateProcess() }
     }
 
     private fun createWebTerminal(h: String, p: Int, pwd: String?, customBasePath: String? = null) {
@@ -581,19 +652,27 @@ class OpenCodeService(private val project: Project) : Disposable {
                 showCliNotFoundError()
                 return@submit
             }
-            ApplicationManager.getApplication().invokeLater {
-                hostname = h; port = p; lastMode = ConnectionMode.WEB
-                createTerminalUIInternal(h, p, pwd, true, bin, customBasePath)
+            if (!startLocalServer(bin, h, p, pwd)) {
+                showCliNotFoundError()
+                return@submit
             }
-            // Increase timeout to 30s for all platforms
-            if (!PortFinder.waitForPort(p, h, timeoutMs = 30000, requireHealth = true)) {
+            val connectHost = if (h == "0.0.0.0") "127.0.0.1" else h
+            if (!PortFinder.waitForPort(p, connectHost, timeoutMs = 30000, requireHealth = true)) {
                 logger.warn("[OpenCode] Initial waitForPort (Web) timed out for $h:$p, starting ConnectionManager anyway")
             }
-            
-            // Even if it timed out, we might still want the UI and the API client to try reconnecting
-            ApplicationManager.getApplication().invokeLater { createWebUI(h, p) }
-            initializeApiClient(h, p)
-            startConnectionManager()
+
+            ApplicationManager.getApplication().invokeLater {
+                if (project.isDisposed) {
+                    terminateProcess()
+                    return@invokeLater
+                }
+                hostname = h; port = p; username = if (pwd.isNullOrBlank()) null else "opencode"; password = pwd
+                lastMode = ConnectionMode.WEB
+                createTerminalUIInternal(h, p, pwd, true, customBasePath)
+                createWebUI(h, p)
+                initializeApiClient(h, p)
+                startConnectionManager()
+            }
         }
     }
 
@@ -610,21 +689,54 @@ class OpenCodeService(private val project: Project) : Disposable {
                 showCliNotFoundError()
                 return@submit
             }
-            ApplicationManager.getApplication().invokeLater {
-                hostname = h; port = p; lastMode = ConnectionMode.TERMINAL
-                createTerminalUIInternal(h, p, pwd, true, bin, customBasePath)
+            if (!startLocalServer(bin, safeH, p, pwd)) {
+                showCliNotFoundError()
+                return@submit
             }
-            // Increase timeout to 30s for all platforms (Windows startup can be slow)
-            if (!PortFinder.waitForPort(p, h, timeoutMs = 30000)) {
+            val connectHost = if (safeH == "0.0.0.0") "127.0.0.1" else safeH
+            if (!PortFinder.waitForPort(p, connectHost, timeoutMs = 30000)) {
                 logger.warn("[OpenCode] Initial waitForPort timed out for $h:$p, starting ConnectionManager anyway")
             }
-            
-            initializeApiClient(h, p)
-            startConnectionManager()
+
+            ApplicationManager.getApplication().invokeLater {
+                if (project.isDisposed) {
+                    terminateProcess()
+                    return@invokeLater
+                }
+                hostname = safeH; port = p; username = if (pwd.isNullOrBlank()) null else "opencode"; password = pwd
+                lastMode = ConnectionMode.TERMINAL
+                createTerminalUIInternal(safeH, p, pwd, true, customBasePath)
+                initializeApiClient(safeH, p)
+                startConnectionManager()
+            }
         }
     }
 
-    private fun createTerminalUIInternal(h: String, p: Int, pwd: String?, cont: Boolean = true, command: String? = null, customBasePath: String? = null) {
+    private fun startLocalServer(binary: String, h: String, p: Int, pwd: String?): Boolean {
+        return try {
+            localServerProcess?.process?.takeIf { it.isAlive }?.let { return true }
+            val commandLine = GeneralCommandLine(listOf(binary, "serve", "--hostname", h, "--port", p.toString()))
+            project.basePath?.let(commandLine::withWorkDirectory)
+            if (!pwd.isNullOrBlank()) commandLine.environment["OPENCODE_SERVER_PASSWORD"] = pwd
+
+            val handler = OSProcessHandler(commandLine)
+            handler.addProcessListener(object : ProcessAdapter() {
+                override fun processTerminated(event: ProcessEvent) {
+                    if (localServerProcess === handler) {
+                        logger.warn("[OpenCode] Local server exited with code ${event.exitCode}")
+                    }
+                }
+            })
+            localServerProcess = handler
+            handler.startNotify()
+            true
+        } catch (e: Exception) {
+            logger.error("[OpenCode] Failed to start local OpenCode server", e)
+            false
+        }
+    }
+
+    private fun createTerminalUIInternal(h: String, p: Int, pwd: String?, cont: Boolean = true, customBasePath: String? = null) {
         val t = "$OPEN_CODE_TAB_PREFIX($p)"
         val wd = customBasePath ?: project.basePath
         val w = TerminalView.getInstance(project).createLocalShellWidget(wd, t)
@@ -634,19 +746,24 @@ class OpenCodeService(private val project: Project) : Disposable {
         ApplicationManager.getApplication().invokeLater {
             terminalEditor = FileEditorManager.getInstance(project).openFile(f, true).firstOrNull { it is OpenCodeTerminalFileEditor } as? OpenCodeTerminalFileEditor
             terminalEditor?.let { 
-                val cmd = command ?: getOpenCodeBinary()
-                w.executeCommand(buildOpenCodeCommand(cmd, h, p, pwd, cont)); pinTerminalTab(f)
+                w.executeCommand(buildOpenCodeCommand(getOpenCodeBinary(), h, p, pwd, cont)); pinTerminalTab(f)
             }
         }
     }
 
     private fun buildOpenCodeCommand(command: String, h: String, p: Int, pwd: String?, cont: Boolean): String {
-        // Quote command if it contains spaces (e.g. absolute path on Windows)
-        val cmdSafe = if (command.contains(" ")) "\"$command\"" else command
-        val base = "$cmdSafe --hostname $h --port $p${if (cont) " --continue" else ""}"
+        val connectHost = if (h == "0.0.0.0") "127.0.0.1" else h
+        val cmdSafe = if (isWindows()) windowsQuote(command) else shellQuote(command)
+        val serverUrl = "http://$connectHost:$p"
+        val serverUrlSafe = if (isWindows()) windowsQuote(serverUrl) else shellQuote(serverUrl)
+        val base = "$cmdSafe --server $serverUrlSafe${if (cont) " --continue" else ""}"
         if (pwd.isNullOrBlank()) return base
         return if (isWindows()) "cmd /c \"set \"OPENCODE_SERVER_PASSWORD=${pwd.replace("\"", "\\\"")}\" && $base\"" else "OPENCODE_SERVER_PASSWORD='${pwd.replace("'", "'\\''")}' $base"
     }
+
+    private fun shellQuote(value: String): String = "'${value.replace("'", "'\\''")}'"
+
+    private fun windowsQuote(value: String): String = "\"${value.replace("\"", "\\\"")}\""
 
     @Volatile private var _cachedBinary: String? = null
 
@@ -811,7 +928,12 @@ class OpenCodeService(private val project: Project) : Disposable {
     private fun schedulePasteAttempt(t: String, l: Int, d: Long) { 
         if (l <= 0 || project.isDisposed) {
             if (l <= 0 && !project.isDisposed) {
-                logger.warn("[Paste] All retries exhausted for: $t")
+                logger.warn("[Paste] Context could not be inserted because no terminal connector became available")
+                sendNotification(
+                    "OpenCode Terminal Unavailable",
+                    "Context was not inserted. Open an OpenCode terminal and try again.",
+                    NotificationType.WARNING
+                )
             }
             return
         }
@@ -826,6 +948,4 @@ class OpenCodeService(private val project: Project) : Disposable {
         }, d, TimeUnit.MILLISECONDS) 
     }
 
-    private fun extractPartMessageInfo(p: JsonElement): PartMessageInfo? { if (!p.isJsonObject) return null; val o = p.asJsonObject; val mId = o.get("messageID")?.asString; val sId = o.get("sessionID")?.asString; return if (mId != null && sId != null) PartMessageInfo(sId, mId) else null }
-    private data class PartMessageInfo(val sessionId: String, val messageId: String)
 }

@@ -15,6 +15,7 @@ class RealProcessIntegrationTest : BasePlatformTestCase() {
 
     private var process: Process? = null
     private var port: Int = 0
+    private val serverPassword = "integration-test-password"
 
     override fun setUp() {
         super.setUp()
@@ -29,7 +30,8 @@ class RealProcessIntegrationTest : BasePlatformTestCase() {
 
         println("Launching opencode: $path serve --port $port")
         
-        val pb = ProcessBuilder(path, "serve", "--port", "$port")
+        val pb = ProcessBuilder(path, "serve", "--hostname", "127.0.0.1", "--port", "$port")
+        pb.environment()["OPENCODE_SERVER_PASSWORD"] = serverPassword
         pb.redirectErrorStream(true)
         process = pb.start()
         
@@ -68,7 +70,7 @@ class RealProcessIntegrationTest : BasePlatformTestCase() {
         val sm = project.service<SessionManager>()
         val dvs = project.service<DiffViewerService>()
         
-        val client = OpenCodeApiClient("127.0.0.1", port)
+        val client = OpenCodeApiClient("127.0.0.1", port, "opencode", serverPassword)
         
         // Inject dependencies
         service.setTestDeps(sm, dvs, client)
@@ -114,7 +116,7 @@ class RealProcessIntegrationTest : BasePlatformTestCase() {
         val sm = project.service<SessionManager>()
         // We don't really need a real client for this test as we invoke SM methods directly, 
         // but we need to inject dependencies to satisfy the service structure if needed.
-        val client = OpenCodeApiClient("127.0.0.1", port)
+        val client = OpenCodeApiClient("127.0.0.1", port, "opencode", serverPassword)
         
         // Mock DiffViewerService to capture entries without trying to open real UI windows
         val mockDiffViewer = object : DiffViewerService(project) {
@@ -215,7 +217,7 @@ class RealProcessIntegrationTest : BasePlatformTestCase() {
     fun testEmptyFileSafety() {
         val service = project.service<OpenCodeService>()
         val sm = project.service<SessionManager>()
-        val client = OpenCodeApiClient("127.0.0.1", port)
+        val client = OpenCodeApiClient("127.0.0.1", port, "opencode", serverPassword)
         
         val mockDiffViewer = object : DiffViewerService(project) {
             override fun showMultiFileDiff(entries: List<ai.opencode.ide.jetbrains.api.models.DiffEntry>, initialIndex: Int?) {}

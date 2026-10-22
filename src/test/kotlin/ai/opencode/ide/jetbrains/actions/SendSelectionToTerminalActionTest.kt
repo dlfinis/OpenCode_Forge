@@ -13,6 +13,7 @@ import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.MapDataContext
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 class SendSelectionToTerminalActionTest : BasePlatformTestCase() {
 
@@ -41,6 +42,11 @@ class SendSelectionToTerminalActionTest : BasePlatformTestCase() {
 
         // Inject dependencies with real API client talking to fake server
         service.setTestDeps(sm, dvs, client)
+        val pastedDraft = AtomicReference<String>()
+        service.terminalDraftWriterForTests = { draft ->
+            pastedDraft.set(draft)
+            true
+        }
 
         // Force connection state
         // We use reflection to set 'isConnected' to true so 'focusOrCreateTerminalAndPaste' 
@@ -72,26 +78,18 @@ class SendSelectionToTerminalActionTest : BasePlatformTestCase() {
         action.actionPerformed(event)
 
         // 4. Verify
-        // Wait for server to receive request (async)
+        // Wait for the terminal draft writer to receive the context (async)
         val start = System.currentTimeMillis()
-        while (server?.receivedPrompts?.isEmpty() == true && System.currentTimeMillis() - start < 2000) {
+        while (pastedDraft.get() == null && System.currentTimeMillis() - start < 2000) {
             PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
             Thread.sleep(50)
         }
 
-        val prompts = server?.receivedPrompts ?: emptyList()
-        assertFalse("Server should have received a prompt", prompts.isEmpty())
-        
-        val lastPrompt = prompts.last()
-        println("Received prompt JSON: $lastPrompt")
-        
-        // Expected JSON: {"text": "@root/mydir "} (approximate, based on relative path)
-        // The relative path logic in SendSelectionToTerminalAction depends on project base path.
-        // In test fixture, project base path is usually the temp dir root.
-        
-        // We verify that it contains the directory path and DOES NOT contain file paths.
-        assertTrue("Should contain directory path", lastPrompt.contains("mydir"))
-        assertFalse("Should NOT contain file1", lastPrompt.contains("file1.txt"))
-        assertFalse("Should NOT contain file2", lastPrompt.contains("file2.txt"))
+        val draft = pastedDraft.get()
+        assertNotNull("Context should be inserted into the terminal draft", draft)
+        assertTrue("Should contain directory path", draft.contains("mydir"))
+        assertFalse("Should NOT contain file1", draft.contains("file1.txt"))
+        assertFalse("Should NOT contain file2", draft.contains("file2.txt"))
+        assertFalse("Draft insertion must not submit the prompt", draft.endsWith("\n"))
     }
 }

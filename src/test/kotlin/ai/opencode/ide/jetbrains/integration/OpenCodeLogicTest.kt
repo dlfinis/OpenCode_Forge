@@ -10,6 +10,7 @@ import com.intellij.openapi.project.Project
 import java.lang.reflect.Proxy
 import java.util.concurrent.CopyOnWriteArrayList
 import org.junit.After
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
@@ -18,6 +19,25 @@ import org.junit.Test
  * Simplified suite covering core Diff scenarios.
  */
 class OpenCodeLogicTest {
+    private var eventId = 0
+
+    private fun v2Event(type: String, data: String): String {
+        eventId++
+        val directory = System.getProperty("java.io.tmpdir").replace("\\", "\\\\").replace("\"", "\\\"")
+        return """{"id":"event-$eventId","type":"$type","created":"2026-10-22T00:00:00Z","data":$data,"location":{"directory":"$directory"}}"""
+    }
+
+    private fun v2SessionResponse(sessionId: String, directory: String): String {
+        val escapedDirectory = directory.replace("\\", "\\\\").replace("\"", "\\\"")
+        return """{"data":{"id":"$sessionId","projectID":"project-1","cost":0,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}},"time":{"created":1,"updated":2},"location":{"directory":"$escapedDirectory"}}}"""
+    }
+
+    private fun diffResponse(file: String, patch: String, additions: Int, deletions: Int, status: String = "modified"): String {
+        val escapedPatch = patch.replace("\\", "\\\\").replace("\n", "\\n").replace("\"", "\\\"")
+        return """{"data":[{"file":"$file","patch":"$escapedPatch","additions":$additions,"deletions":$deletions,"status":"$status"}]}"""
+    }
+
+    private fun emptyDiffResponse(): String = """{"data":[]}"""
     
     @Before
     fun setUp() {
@@ -42,6 +62,7 @@ class OpenCodeLogicTest {
         
         val r = runner
         val s = server
+        s.setSessionResponse("s1", v2SessionResponse("s1", System.getProperty("java.io.tmpdir")))
         
         try {
             // Wait for connection to establish
@@ -57,22 +78,26 @@ class OpenCodeLogicTest {
             r.resetState()
             
             // 1. Start Turn
-            s.broadcast("""{"type":"session.status","properties":{"sessionID":"s1","status":{"type":"busy"}}}""")
+            s.broadcast(v2Event("session.status", """{"sessionID":"s1","status":{"type":"busy"}}"""))
             Thread.sleep(100)
             
             // 2. Edit file
-            s.broadcast("""{"type":"file.edited","properties":{"file":"a.kt"}}""")
+            s.broadcast(v2Event("file.edited", """{"file":"a.kt"}"""))
             
             // 3. Update Message
-            s.broadcast("""{"type":"message.updated","properties":{"info":{"id":"msg-1","sessionID":"s1","role":"assistant"}}}""")
+            s.broadcastSseEvent(
+                "message.updated",
+                """{"sessionID":"s1","info":{"id":"msg-1","type":"user"}}"""
+            )
             
             // 4. End Turn
-            s.setDiffResponse("msg-1", """[{"file":"a.kt","before":"old","after":"new","additions":1,"deletions":0}]""")
-            s.broadcast("""{"type":"session.status","properties":{"sessionID":"s1","status":{"type":"idle"}}}""")
+            s.setDiffResponse("msg-1", diffResponse("a.kt", "@@ -1 +1 @@\n-old\n+new\n", 1, 1))
+            s.broadcast(v2Event("session.status", """{"sessionID":"s1","status":{"type":"idle"}}"""))
             
             // Verify
             r.waitForDiffs(1)
             r.assertDiffShown("a.kt")
+            assertTrue(s.requestUris.contains("/api/session/s1/diff?from=msg-1"))
             println("✓ Passed")
 
             // --------------------------------------------------
@@ -86,28 +111,28 @@ class OpenCodeLogicTest {
             
             // Turn 1
             println("  Step 1: Turn 1 edits a.kt")
-            s.broadcast("""{"type":"session.status","properties":{"sessionID":"s1","status":{"type":"busy"}}}""")
+            s.broadcast(v2Event("session.status", """{"sessionID":"s1","status":{"type":"busy"}}"""))
             Thread.sleep(100)
-            s.broadcast("""{"type":"file.edited","properties":{"file":"a.kt"}}""")
-            s.broadcast("""{"type":"message.updated","properties":{"info":{"id":"msg-3","sessionID":"s1","role":"assistant"}}}""")
+            s.broadcast(v2Event("file.edited", """{"file":"a.kt"}"""))
+            s.broadcast(v2Event("message.updated", """{"info":{"id":"msg-3","sessionID":"s1","role":"user"}}"""))
             
-            s.setDiffResponse("msg-3", """[{"file":"a.kt","before":"old","after":"new","additions":1,"deletions":0}]""")
-            s.broadcast("""{"type":"session.status","properties":{"sessionID":"s1","status":{"type":"idle"}}}""")
+            s.setDiffResponse("msg-3", diffResponse("a.kt", "@@ -1 +1 @@\n-old\n+new\n", 1, 1))
+            s.broadcast(v2Event("session.status", """{"sessionID":"s1","status":{"type":"idle"}}"""))
             
             r.waitForDiffs(1)
             r.assertDiffShown("a.kt")
             
             // Turn 2: Starts immediately
             println("  Step 2: Turn 2 starts (clearing real-time state)")
-            s.broadcast("""{"type":"session.status","properties":{"sessionID":"s1","status":{"type":"busy"}}}""")
+            s.broadcast(v2Event("session.status", """{"sessionID":"s1","status":{"type":"busy"}}"""))
             Thread.sleep(100)
             
             // Turn 2: Pure chat
-            s.broadcast("""{"type":"message.updated","properties":{"info":{"id":"msg-4","sessionID":"s1","role":"assistant"}}}""")
-            s.setDiffResponse("msg-4", "[]")
+            s.broadcast(v2Event("message.updated", """{"info":{"id":"msg-4","sessionID":"s1","role":"user"}}"""))
+            s.setDiffResponse("msg-4", emptyDiffResponse())
             
             // Turn 2 Ends
-            s.broadcast("""{"type":"session.status","properties":{"sessionID":"s1","status":{"type":"idle"}}}""")
+            s.broadcast(v2Event("session.status", """{"sessionID":"s1","status":{"type":"idle"}}"""))
             
             r.waitForDiffs(0, timeoutMs = 1000)
             r.assertNoDiffsShown()
@@ -123,7 +148,7 @@ class OpenCodeLogicTest {
             r.resetState()
             
             // 1. Start Turn
-            s.broadcast("""{"type":"session.status","properties":{"sessionID":"s1","status":{"type":"busy"}}}""")
+            s.broadcast(v2Event("session.status", """{"sessionID":"s1","status":{"type":"busy"}}"""))
             Thread.sleep(100)
             
             // 2. Simulate AI writing a new file to disk
@@ -132,14 +157,14 @@ class OpenCodeLogicTest {
             newFile.writeText("fun new() {}")
             r.sessionManager.simulateFileCreation("new.kt") // Signal VFS creation
             
-            s.broadcast("""{"type":"file.edited","properties":{"file":"new.kt"}}""")
-            s.broadcast("""{"type":"message.updated","properties":{"info":{"id":"msg-8","sessionID":"s1","role":"assistant"}}}""")
+            s.broadcast(v2Event("file.edited", """{"file":"new.kt"}"""))
+            s.broadcast(v2Event("message.updated", """{"info":{"id":"msg-8","sessionID":"s1","role":"user"}}"""))
             
             // 3. Server says it's a new file (before="", after="fun new() {}")
-            s.setDiffResponse("msg-8", """[{"file":"new.kt","before":"","after":"fun new() {}","additions":1,"deletions":0}]""")
+            s.setDiffResponse("msg-8", diffResponse("new.kt", "@@ -0,0 +1 @@\n+fun new() {}\n", 1, 0, "added"))
             
             // 4. End Turn
-            s.broadcast("""{"type":"session.status","properties":{"sessionID":"s1","status":{"type":"idle"}}}""")
+            s.broadcast(v2Event("session.status", """{"sessionID":"s1","status":{"type":"idle"}}"""))
             
             // 5. Verify
             r.waitForDiffs(1)
@@ -158,7 +183,7 @@ class OpenCodeLogicTest {
             r.resetState()
             
             // 1. Start Turn
-            s.broadcast("""{"type":"session.status","properties":{"sessionID":"s1","status":{"type":"busy"}}}""")
+            s.broadcast(v2Event("session.status", """{"sessionID":"s1","status":{"type":"busy"}}"""))
             Thread.sleep(100)
             
             // 2. Simulate User editing a file
@@ -166,14 +191,14 @@ class OpenCodeLogicTest {
             r.sessionManager.simulateVfsChange("user_edited.kt")
             
             // 3. AI edits another file
-            s.broadcast("""{"type":"file.edited","properties":{"file":"ai_edited.kt"}}""")
-            s.broadcast("""{"type":"message.updated","properties":{"info":{"id":"msg-9","sessionID":"s1","role":"assistant"}}}""")
+            s.broadcast(v2Event("file.edited", """{"file":"ai_edited.kt"}"""))
+            s.broadcast(v2Event("message.updated", """{"info":{"id":"msg-9","sessionID":"s1","role":"user"}}"""))
             
             // 4. Server returns ONLY AI file
-            s.setDiffResponse("msg-9", """[{"file":"ai_edited.kt","before":"","after":"content","additions":1,"deletions":0}]""")
+            s.setDiffResponse("msg-9", diffResponse("ai_edited.kt", "@@ -0,0 +1 @@\n+content\n", 1, 0, "added"))
             
             // 5. End Turn
-            s.broadcast("""{"type":"session.status","properties":{"sessionID":"s1","status":{"type":"idle"}}}""")
+            s.broadcast(v2Event("session.status", """{"sessionID":"s1","status":{"type":"idle"}}"""))
             
             // 6. Verify
             r.waitForDiffs(1)
@@ -200,7 +225,7 @@ class OpenCodeLogicTest {
             toDelete.writeText("delete me")
             
             // 2. Start Turn
-            s.broadcast("""{"type":"session.status","properties":{"sessionID":"s1","status":{"type":"busy"}}}""")
+            s.broadcast(v2Event("session.status", """{"sessionID":"s1","status":{"type":"busy"}}"""))
             Thread.sleep(100)
             Thread.sleep(100) // Wait for async onTurnStart
             
@@ -213,11 +238,11 @@ class OpenCodeLogicTest {
             r.sessionManager.simulateVfsChange("to_delete.kt")
             
             // 4. Server returns NOTHING
-            s.setDiffResponse("msg-14", "[]")
-            s.broadcast("""{"type":"message.updated","properties":{"info":{"id":"msg-14","sessionID":"s1","role":"assistant"}}}""")
+            s.setDiffResponse("msg-14", emptyDiffResponse())
+            s.broadcast(v2Event("message.updated", """{"info":{"id":"msg-14","sessionID":"s1","role":"user"}}"""))
             
             // 5. End Turn
-            s.broadcast("""{"type":"session.status","properties":{"sessionID":"s1","status":{"type":"idle"}}}""")
+            s.broadcast(v2Event("session.status", """{"sessionID":"s1","status":{"type":"idle"}}"""))
             
             // 6. Verify
             r.waitForDiffs(1)
@@ -234,7 +259,7 @@ class OpenCodeLogicTest {
             r.resetState()
             
             // 1. Start Turn
-            s.broadcast("""{"type":"session.status","properties":{"sessionID":"s1","status":{"type":"busy"}}}""")
+            s.broadcast(v2Event("session.status", """{"sessionID":"s1","status":{"type":"busy"}}"""))
             Thread.sleep(100)
             
             // 2. No VFS events! 
@@ -242,9 +267,9 @@ class OpenCodeLogicTest {
             r.sessionManager.simulateServerEdited("server_only.kt")
             
             // 3. End Turn (Server returns a diff)
-            s.setDiffResponse("msg-16", """[{"file":"server_only.kt","before":"a","after":"b","additions":1,"deletions":1}]""")
-            s.broadcast("""{"type":"message.updated","properties":{"info":{"id":"msg-16","sessionID":"s1","role":"assistant"}}}""")
-            s.broadcast("""{"type":"session.status","properties":{"sessionID":"s1","status":{"type":"idle"}}}""")
+            s.setDiffResponse("msg-16", diffResponse("server_only.kt", "@@ -1 +1 @@\n-a\n+b\n", 1, 1))
+            s.broadcast(v2Event("message.updated", """{"info":{"id":"msg-16","sessionID":"s1","role":"user"}}"""))
+            s.broadcast(v2Event("session.status", """{"sessionID":"s1","status":{"type":"idle"}}"""))
             Thread.sleep(100)
             
             // 4. Verify: Diff SHOWN
@@ -263,38 +288,38 @@ class OpenCodeLogicTest {
             
             // Turn 1: Create 1.md
             println("  Step 1: Create 1.md")
-            s.broadcast("""{"type":"session.status","properties":{"sessionID":"s1","status":{"type":"busy"}}}""")
+            s.broadcast(v2Event("session.status", """{"sessionID":"s1","status":{"type":"busy"}}"""))
             Thread.sleep(100)
             
             val file1 = java.io.File(tempDir, "1.md")
             file1.writeText("created content")
             r.sessionManager.simulateFileCreation("1.md")
-            s.broadcast("""{"type":"file.edited","properties":{"file":"1.md"}}""")
-            s.broadcast("""{"type":"message.updated","properties":{"info":{"id":"msg-17-a","sessionID":"s1","role":"assistant"}}}""")
+            s.broadcast(v2Event("file.edited", """{"file":"1.md"}"""))
+            s.broadcast(v2Event("message.updated", """{"info":{"id":"msg-17-a","sessionID":"s1","role":"user"}}"""))
             
             // Server might return diff or not. Let's say it returns nothing (Rescue Creation)
-            s.setDiffResponse("msg-17-a", "[]")
+            s.setDiffResponse("msg-17-a", emptyDiffResponse())
             
-            s.broadcast("""{"type":"session.status","properties":{"sessionID":"s1","status":{"type":"idle"}}}""")
+            s.broadcast(v2Event("session.status", """{"sessionID":"s1","status":{"type":"idle"}}"""))
             
             r.waitForDiffs(1)
             r.assertDiffShown("1.md")
             
             // Turn 2: Modify 1.md
             println("  Step 2: Modify 1.md")
-            s.broadcast("""{"type":"session.status","properties":{"sessionID":"s1","status":{"type":"busy"}}}""")
+            s.broadcast(v2Event("session.status", """{"sessionID":"s1","status":{"type":"busy"}}"""))
             Thread.sleep(100)
             
             file1.writeText("modified content")
             // Crucially: NOT calling simulateFileCreation here, only VfsChange
             r.sessionManager.simulateVfsChange("1.md")
-            s.broadcast("""{"type":"file.edited","properties":{"file":"1.md"}}""")
-            s.broadcast("""{"type":"message.updated","properties":{"info":{"id":"msg-17-b","sessionID":"s1","role":"assistant"}}}""")
+            s.broadcast(v2Event("file.edited", """{"file":"1.md"}"""))
+            s.broadcast(v2Event("message.updated", """{"info":{"id":"msg-17-b","sessionID":"s1","role":"user"}}"""))
             
             // Server returns empty diffs again (Simulate API failure)
-            s.setDiffResponse("msg-17-b", "[]")
+            s.setDiffResponse("msg-17-b", emptyDiffResponse())
             
-            s.broadcast("""{"type":"session.status","properties":{"sessionID":"s1","status":{"type":"idle"}}}""")
+            s.broadcast(v2Event("session.status", """{"sessionID":"s1","status":{"type":"idle"}}"""))
             
             // Verify diff is shown (Rescue Modification)
             r.waitForDiffs(1)

@@ -39,7 +39,7 @@ Click the **OpenCode** icon in the right sidebar to instantly focus or create an
 ## Requirements
 
 - **JetBrains IDE**: IntelliJ IDEA, WebStorm, PyCharm, etc. (2025.2+)
-- **OpenCode CLI**: Install via `npm install -g opencode` or see [opencode.ai/download](https://opencode.ai/download)
+- **OpenCode CLI**: Install the v2 CLI with `curl -fsSL https://opencode.ai/v2/install | bash` or see [opencode.ai/download](https://opencode.ai/download)
 
 ## Installation
 
@@ -66,6 +66,7 @@ In the editor or Project View, press `Opt+Cmd+K` (Mac) or `Ctrl+Alt+K` (Win/Linu
 
 - If the OpenCode terminal is not open yet, the plugin creates/focuses it automatically.
 - In the editor, it shares the **current file** even if nothing is selected.
+- Context is inserted into the OpenCode terminal draft; it is not submitted as a prompt.
 
 ![Step 2: Selection](images/2.png)
 
@@ -134,10 +135,10 @@ The plugin uses a single terminal tab per project named **"OpenCode({port})"**.
 Install the OpenCode CLI:
 
 ```bash
-npm install -g opencode-ai
+curl -fsSL https://opencode.ai/v2/install | bash
 ```
 
-Or download from [opencode.ai/download](https://opencode.ai/download)
+Alternatively, install with `npm install -g @opencode/cli` or download from [opencode.ai/download](https://opencode.ai/download).
 
 ### Terminal not responding
 

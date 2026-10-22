@@ -117,13 +117,15 @@ data class MessageUpdatedEvent(
 ) : OpenCodeEvent()
 
 data class MessageUpdatedProperties(
-    val info: MessageInfo
+    val info: MessageInfo,
+    val sessionID: String? = null
 )
 
 data class MessageInfo(
     val id: String,
-    val sessionID: String,
-    val role: String? = null
+    val sessionID: String? = null,
+    val role: String? = null,
+    val type: String? = null
 )
 
 /**
@@ -140,6 +142,17 @@ data class CommandExecutedProperties(
     val sessionID: String,
     val arguments: String,
     val messageID: String
+)
+
+data class SessionStepEndedEvent(
+    @SerializedName("type")
+    override val type: String = "session.step.ended",
+    val properties: SessionStepEndedProperties
+) : OpenCodeEvent()
+
+data class SessionStepEndedProperties(
+    val sessionID: String,
+    val messageID: String? = null
 )
 
 /**
@@ -159,20 +172,75 @@ class OpenCodeEventDeserializer : JsonDeserializer<OpenCodeEvent> {
         typeOfT: Type,
         context: JsonDeserializationContext
     ): OpenCodeEvent {
-        val jsonObject = json.asJsonObject
-        val eventType = jsonObject.get("type")?.asString ?: return UnknownEvent("unknown")
+        val jsonObject = decodeJson(json).takeIf { it.isJsonObject }?.asJsonObject
+            ?: return UnknownEvent("unknown")
+        val eventType = jsonObject.stringValue("type", "event") ?: return UnknownEvent("unknown")
+        val payload = eventPayload(jsonObject)
 
         return when (eventType) {
-            "session.diff" -> context.deserialize(json, SessionDiffEvent::class.java)
-            "session.idle" -> context.deserialize(json, SessionIdleEvent::class.java)
-            "session.status" -> context.deserialize(json, SessionStatusEvent::class.java)
-            "session.updated" -> context.deserialize(json, SessionUpdatedEvent::class.java)
-            "file.edited" -> context.deserialize(json, FileEditedEvent::class.java)
-            "message.updated" -> context.deserialize(json, MessageUpdatedEvent::class.java)
-            "message.part.updated" -> context.deserialize(json, MessagePartUpdatedEvent::class.java)
-            "message.part.removed" -> context.deserialize(json, MessagePartRemovedEvent::class.java)
-            "command.executed" -> context.deserialize(json, CommandExecutedEvent::class.java)
+            "session.diff" -> SessionDiffEvent(eventType, context.deserialize(payload, SessionDiffProperties::class.java))
+            "session.idle" -> SessionIdleEvent(eventType, context.deserialize(payload, SessionIdleProperties::class.java))
+            "session.status" -> deserializeStatus(eventType, payload, context)
+            "session.updated" -> SessionUpdatedEvent(eventType, context.deserialize(withNested(payload, "info"), SessionUpdatedProperties::class.java))
+            "file.edited" -> FileEditedEvent(eventType, context.deserialize(payload, FileEditedProperties::class.java))
+            "message.updated" -> MessageUpdatedEvent(eventType, context.deserialize(withNested(payload, "info"), MessageUpdatedProperties::class.java))
+            "message.part.updated" -> MessagePartUpdatedEvent(eventType, context.deserialize(withNested(payload, "part"), MessagePartUpdatedProperties::class.java))
+            "message.part.removed" -> MessagePartRemovedEvent(eventType, context.deserialize(payload, MessagePartRemovedProperties::class.java))
+            "command.executed" -> CommandExecutedEvent(eventType, context.deserialize(payload, CommandExecutedProperties::class.java))
+            "session.step.ended" -> SessionStepEndedEvent(eventType, deserializeStepEnded(payload))
             else -> UnknownEvent(eventType)
         }
     }
+
+    private fun deserializeStatus(
+        eventType: String,
+        payload: JsonObject,
+        context: JsonDeserializationContext
+    ): SessionStatusEvent {
+        val normalized = payload.deepCopy()
+        val status = normalized.get("status")
+        if (status != null && status.isJsonPrimitive) {
+            normalized.add("status", JsonObject().apply { addProperty("type", status.asString) })
+        }
+        return SessionStatusEvent(eventType, context.deserialize(normalized, SessionStatusProperties::class.java))
+    }
+
+    private fun deserializeStepEnded(payload: JsonObject): SessionStepEndedProperties {
+        val sessionId = payload.stringValue("sessionID", "sessionId") ?: ""
+        val messageId = payload.stringValue("messageID", "messageId")
+        return SessionStepEndedProperties(sessionId, messageId)
+    }
+
+    private fun withNested(payload: JsonObject, field: String): JsonObject {
+        if (payload.get(field)?.isJsonObject == true) return payload
+        return JsonObject().apply { add(field, payload) }
+    }
+
+    private fun eventPayload(event: JsonObject): JsonObject {
+        var payload = event
+        repeat(4) {
+            val nested = payload.get("data")?.let(::decodeJson)
+                ?: payload.get("properties")
+                ?: return payload
+            if (!nested.isJsonObject) return payload
+            payload = nested.asJsonObject
+        }
+        return payload
+    }
+
+    private fun decodeJson(element: JsonElement): JsonElement {
+        var decoded = element
+        repeat(3) {
+            if (!decoded.isJsonPrimitive || !decoded.asJsonPrimitive.isString) return decoded
+            decoded = try {
+                JsonParser.parseString(decoded.asString)
+            } catch (_: JsonParseException) {
+                return decoded
+            }
+        }
+        return decoded
+    }
+
+    private fun JsonObject.stringValue(vararg names: String): String? = names
+        .firstNotNullOfOrNull { name -> get(name)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString }
 }

@@ -6,33 +6,26 @@ package ai.opencode.ide.jetbrains.api.models
 data class Session(
     val id: String,
     val projectID: String,
-    val directory: String,
-    val title: String,
+    val location: SessionLocation,
+    val time: SessionTime,
+    val title: String? = null,
     val parentID: String? = null,
-    val summary: SessionSummary? = null,
-    val time: SessionTime? = null
+)
+
+data class SessionLocation(
+    val directory: String
 )
 
 /**
  * Session time information.
  */
 data class SessionTime(
+    val created: Double,
     val updated: Double
 )
 
 /**
- * Summary information for a session.
- */
-data class SessionSummary(
-    val additions: Int,
-    val deletions: Int,
-    val files: Int,
-    val diffs: List<FileDiff>? = null
-)
-
-/**
- * Session status from /session/status endpoint.
- * Used to identify the currently active (busy) session.
+ * Session status returned by the active-session endpoint or status events.
  */
 data class SessionStatus(
     val sessionID: String,
@@ -48,7 +41,7 @@ data class SessionStatusType(
     val message: String? = null,
     val next: Long? = null
 ) {
-    fun isBusy(): Boolean = type == "busy"
+    fun isBusy(): Boolean = type == "busy" || type == "running" || type == "retry"
     fun isIdle(): Boolean = type == "idle"
     fun isRetry(): Boolean = type == "retry"
 }

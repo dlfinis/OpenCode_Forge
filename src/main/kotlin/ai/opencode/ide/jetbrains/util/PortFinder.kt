@@ -74,7 +74,7 @@ object PortFinder {
         password: String? = null
     ): Boolean {
         return try {
-            val url = java.net.URL("http://$hostname:$port/global/health")
+            val url = java.net.URL("http://$hostname:$port/api/info")
             val connection = url.openConnection(Proxy.NO_PROXY) as java.net.HttpURLConnection
             connection.connectTimeout = CONNECT_TIMEOUT_MS
             connection.readTimeout = READ_TIMEOUT_MS

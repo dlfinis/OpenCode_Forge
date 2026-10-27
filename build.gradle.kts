@@ -23,6 +23,11 @@ dependencies {
         // Terminal API
         bundledPlugin("org.jetbrains.plugins.terminal")
 
+        // Load language parsers in the test IDE to exercise optional PSI support.
+        // The plugin does not declare Java or Kotlin as required runtime dependencies.
+        bundledPlugin("com.intellij.java")
+        bundledPlugin("org.jetbrains.kotlin")
+
     }
 
     // HTTP client and JSON
@@ -41,6 +46,11 @@ intellijPlatform {
         }
 
         changeNotes = """
+            <h2>1.1.1</h2>
+            <ul>
+                <li>Fix: Make code references discoverable in the editor context menu and Tools menu.</li>
+                <li>New: Add references to the enclosing class when no code is selected, with clipboard fallback if terminal delivery fails.</li>
+            </ul>
             <h2>1.1.0</h2>
             <ul>
                 <li>New: Custom base path support — added a "Custom base path" dropdown in the connection dialog, allowing users to specify a working directory for OpenCode terminal sessions. Automatically populated with detected project modules.</li>

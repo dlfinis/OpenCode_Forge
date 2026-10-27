@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "ai.opencode"
-version = "1.1.0"
+version = "1.1.2"
 
 repositories {
     mavenCentral()
@@ -46,6 +46,10 @@ intellijPlatform {
         }
 
         changeNotes = """
+            <h2>1.1.2</h2>
+            <ul>
+                <li>Fix: Reuse remembered or detected live local OpenCode servers and open the local terminal on the first successful connection.</li>
+            </ul>
             <h2>1.1.1</h2>
             <ul>
                 <li>Fix: Make code references discoverable in the editor context menu and Tools menu.</li>

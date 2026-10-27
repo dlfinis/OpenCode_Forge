@@ -18,14 +18,40 @@ import java.util.Base64
 import javax.swing.JComponent
 import javax.swing.JPanel
 
+internal data class ServerAddress(val hostname: String, val port: Int) {
+    val isLocal: Boolean
+        get() = hostname in LOCAL_HOSTS
+
+    fun asAddress(): String = "$hostname:$port"
+
+    private companion object {
+        val LOCAL_HOSTS = setOf("127.0.0.1", "localhost", "0.0.0.0")
+    }
+}
+
+internal fun chooseConnectionAddress(
+    rememberedAddress: ServerAddress?,
+    discoveredLocalPort: Int?
+): String? = when {
+    rememberedAddress != null && !rememberedAddress.isLocal -> rememberedAddress.asAddress()
+    rememberedAddress != null && discoveredLocalPort == rememberedAddress.port -> rememberedAddress.asAddress()
+    discoveredLocalPort != null -> "127.0.0.1:$discoveredLocalPort"
+    rememberedAddress != null -> rememberedAddress.asAddress()
+    else -> null
+}
+
 /**
  * Dialog for configuring OpenCode server connection.
  * Allows user to specify host:port before starting the terminal.
  */
 class OpenCodeConnectDialog(
     private val project: Project,
-    private val defaultPort: Int
+    defaultAddress: String
 ) : DialogWrapper(project, true) {
+
+    private val initialAddress = requireNotNull(parseAddress(defaultAddress)) {
+        "Default OpenCode address must use hostname:port format"
+    }
 
     data class ConnectionInfo(
         val hostname: String,
@@ -35,15 +61,15 @@ class OpenCodeConnectDialog(
         val customBasePath: String? = null
     )
 
-    private val addressField = JBTextField("127.0.0.1:$defaultPort")
+    private val addressField = JBTextField(initialAddress.asAddress())
     private val passwordField = JBPasswordField()
     private val basePathField = ComboBox<String>().apply {
         isEditable = true
     }
     
-    var hostname: String = "127.0.0.1"
+    var hostname: String = initialAddress.hostname
         private set
-    var port: Int = defaultPort
+    var port: Int = initialAddress.port
         private set
     var password: String? = null
         private set
@@ -70,9 +96,6 @@ class OpenCodeConnectDialog(
 
         // Load saved values
         val props = PropertiesComponent.getInstance()
-        // Always suggest a new available port by default
-        addressField.text = "127.0.0.1:$defaultPort"
-        
         // Load saved password (Base64 encoded for basic obfuscation)
         try {
             val encodedPassword = props.getValue(PROP_LAST_PASSWORD, "")
@@ -195,8 +218,23 @@ class OpenCodeConnectDialog(
          * Shows the dialog and returns the result.
          * @return ConnectionInfo if user clicked Connect, null if cancelled
          */
-        fun show(project: Project, defaultPort: Int): ConnectionInfo? {
-            val dialog = OpenCodeConnectDialog(project, defaultPort)
+        internal fun getRememberedAddress(): ServerAddress? {
+            return parseAddress(PropertiesComponent.getInstance().getValue(PROP_LAST_ADDRESS, ""))
+        }
+
+        internal fun parseAddress(value: String?): ServerAddress? {
+            val parts = value?.trim()?.split(":") ?: return null
+            if (parts.size != 2) return null
+
+            val hostname = parts[0].trim()
+            val port = parts[1].trim().toIntOrNull()?.takeIf { it in 1..65535 } ?: return null
+            if (hostname.isBlank()) return null
+
+            return ServerAddress(hostname, port)
+        }
+
+        fun show(project: Project, defaultAddress: String): ConnectionInfo? {
+            val dialog = OpenCodeConnectDialog(project, defaultAddress)
             return if (dialog.showAndGet()) {
                 ConnectionInfo(dialog.hostname, dialog.port, dialog.password, dialog.useWebInterface, dialog.customBasePath)
             } else {

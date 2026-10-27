@@ -11,6 +11,7 @@ import ai.opencode.ide.jetbrains.terminal.OpenCodeTerminalFileEditorProvider
 import ai.opencode.ide.jetbrains.terminal.OpenCodeTerminalLinkFilter
 import ai.opencode.ide.jetbrains.terminal.OpenCodeTerminalVirtualFile
 import ai.opencode.ide.jetbrains.ui.OpenCodeConnectDialog
+import ai.opencode.ide.jetbrains.ui.chooseConnectionAddress
 import ai.opencode.ide.jetbrains.util.PathUtil
 import ai.opencode.ide.jetbrains.util.PortFinder
 import ai.opencode.ide.jetbrains.util.ProcessAuthDetector
@@ -700,13 +701,29 @@ class OpenCodeService(private val project: Project) : Disposable {
 
     private fun showConnectionDialog() {
         AppExecutorUtil.getAppExecutorService().submit {
-            val suggested = PortFinder.findAvailablePort()
+            val suggestedAddress = resolveSuggestedAddress()
             ApplicationManager.getApplication().invokeLater {
-                OpenCodeConnectDialog.show(project, suggested)?.let { 
+                OpenCodeConnectDialog.show(project, suggestedAddress)?.let {
                     processConnectionChoice(it.hostname, it.port, it.password, it.useWebInterface, it.customBasePath) 
                 }
             }
         }
+    }
+
+    internal fun resolveSuggestedAddress(): String {
+        val rememberedAddress = OpenCodeConnectDialog.getRememberedAddress()
+        val rememberedServerIsLive = rememberedAddress?.takeIf { it.isLocal }?.let {
+            val probeHost = if (it.hostname == "0.0.0.0") "127.0.0.1" else it.hostname
+            PortFinder.isOpenCodeRunningOnPort(it.port, probeHost)
+        } == true
+        val discoveredLocalPort = when {
+            rememberedServerIsLive -> rememberedAddress?.port
+            rememberedAddress == null || rememberedAddress.isLocal -> PortFinder.findRunningOpenCodeServer()
+            else -> null
+        }
+
+        return chooseConnectionAddress(rememberedAddress, discoveredLocalPort)
+            ?: "127.0.0.1:${PortFinder.findAvailablePort()}"
     }
 
     private fun processConnectionChoice(h: String, p: Int, pwd: String?, web: Boolean, customBasePath: String? = null) {
@@ -796,7 +813,9 @@ class OpenCodeService(private val project: Project) : Disposable {
 
     private fun connectToExistingServer(h: String, p: Int, a: ProcessAuthDetector.ServerAuth, ui: Boolean, web: Boolean, customBasePath: String? = null) {
         hostname = h; port = p; username = a.username; password = a.password
-        if (ui) { if (web) createWebUI(h, p) else createTerminalUIInternal(h, p, a.password, false, customBasePath) }
+        if (shouldOpenUiForExistingConnection(h, ui)) {
+            if (web) createWebUI(h, p) else createTerminalUIInternal(h, p, a.password, false, customBasePath)
+        }
         else { ApplicationManager.getApplication().invokeLater { Messages.showInfoMessage(project, "Connected to $h:$p", "OpenCode") } }
         initializeApiClient(h, p); startConnectionManager()
     }

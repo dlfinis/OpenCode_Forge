@@ -1,0 +1,58 @@
+package ai.opencode.ide.jetbrains.integration
+
+import ai.opencode.ide.jetbrains.OpenCodeService
+import com.intellij.openapi.project.Project
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assume.assumeFalse
+import org.junit.Test
+import java.lang.reflect.Proxy
+
+class OpenCodeServiceCommandTest {
+    @Test
+    fun includesBothCredentialVariablesWithShellEscapedPassword() {
+        assumeFalse(System.getProperty("os.name", "").lowercase().contains("windows"))
+
+        val command = newService().buildOpenCodeCommand(
+            command = "/opt/Open Code/opencode",
+            h = "127.0.0.1",
+            p = 4096,
+            pwd = "s3cure'pw",
+            cont = true
+        )
+
+        assertEquals(
+            "OPENCODE_PASSWORD='s3cure'\\''pw' OPENCODE_SERVER_PASSWORD='s3cure'\\''pw' " +
+                "'/opt/Open Code/opencode' --server 'http://127.0.0.1:4096' --continue",
+            command
+        )
+    }
+
+    @Test
+    fun omitsCredentialVariablesWhenNoPasswordIsProvided() {
+        assumeFalse(System.getProperty("os.name", "").lowercase().contains("windows"))
+
+        val command = newService().buildOpenCodeCommand(
+            command = "/usr/local/bin/opencode",
+            h = "127.0.0.1",
+            p = 4096,
+            pwd = null,
+            cont = false
+        )
+
+        assertEquals("'/usr/local/bin/opencode' --server 'http://127.0.0.1:4096'", command)
+        assertFalse(command.contains("OPENCODE_PASSWORD"))
+        assertFalse(command.contains("OPENCODE_SERVER_PASSWORD"))
+        assertFalse(command.contains("s3cure"))
+    }
+
+    private fun newService(): OpenCodeService {
+        val project = Proxy.newProxyInstance(
+            Project::class.java.classLoader,
+            arrayOf(Project::class.java)
+        ) { _, method, _ ->
+            if (method.name == "toString") "MockProject" else null
+        } as Project
+        return OpenCodeService(project)
+    }
+}

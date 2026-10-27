@@ -1,16 +1,18 @@
 package ai.opencode.ide.jetbrains.integration
 
 import com.sun.net.httpserver.HttpServer
+import com.sun.net.httpserver.HttpExchange
 import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
+import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 
-class FakeOpenCodeServer(port: Int) {
+class FakeOpenCodeServer(port: Int, private val password: String? = null) {
     private val server = HttpServer.create(InetSocketAddress("127.0.0.1", port), 0)
     private val sseClients = CopyOnWriteArrayList<OutputStream>()
     private val diffResponses = ConcurrentHashMap<String, String>()
@@ -28,12 +30,16 @@ class FakeOpenCodeServer(port: Int) {
 
     init {
         server.createContext("/") { exchange ->
+            if (exchange.requestURI.path.startsWith("/api/") && rejectUnauthorized(exchange)) {
+                return@createContext
+            }
             val response = "Not found".toByteArray()
             exchange.sendResponseHeaders(404, response.size.toLong())
             exchange.responseBody.use { it.write(response) }
         }
 
         server.createContext("/api/info") { exchange ->
+            if (rejectUnauthorized(exchange)) return@createContext
             val response = "{\"version\":\"2.1.3\"}".toByteArray()
             exchange.responseHeaders.add("Content-Type", "application/json")
             exchange.sendResponseHeaders(200, response.size.toLong())
@@ -41,6 +47,7 @@ class FakeOpenCodeServer(port: Int) {
         }
 
         server.createContext("/api/event") { exchange ->
+            if (rejectUnauthorized(exchange)) return@createContext
             exchange.responseHeaders.add("Content-Type", "text/event-stream")
             exchange.responseHeaders.add("Cache-Control", "no-cache")
             exchange.sendResponseHeaders(200, 0)
@@ -65,6 +72,7 @@ class FakeOpenCodeServer(port: Int) {
         }
 
         server.createContext("/api/session") { exchange ->
+            if (rejectUnauthorized(exchange)) return@createContext
             requestUris.add(exchange.requestURI.toString())
             val path = exchange.requestURI.path
             val body = when {
@@ -148,5 +156,19 @@ class FakeOpenCodeServer(port: Int) {
 
     fun setSessionResponse(sessionId: String, json: String) {
         sessionResponses[sessionId] = json
+    }
+
+    private fun rejectUnauthorized(exchange: HttpExchange): Boolean {
+        val configuredPassword = password ?: return false
+        val expectedAuthorization = "Basic " + Base64.getEncoder().encodeToString(
+            "opencode:$configuredPassword".toByteArray(StandardCharsets.UTF_8)
+        )
+        if (exchange.requestHeaders.getFirst("Authorization") == expectedAuthorization) return false
+
+        val response = "Unauthorized".toByteArray(StandardCharsets.UTF_8)
+        exchange.responseHeaders.add("WWW-Authenticate", "Basic realm=\"OpenCode\"")
+        exchange.sendResponseHeaders(401, response.size.toLong())
+        exchange.responseBody.use { it.write(response) }
+        return true
     }
 }

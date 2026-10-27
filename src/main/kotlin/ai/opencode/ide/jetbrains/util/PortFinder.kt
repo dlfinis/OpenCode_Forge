@@ -102,6 +102,32 @@ object PortFinder {
     }
 
     /**
+     * Checks whether the OpenCode server requires authentication when accessed without credentials.
+     * Uses Proxy.NO_PROXY to bypass system proxy settings.
+     *
+     * @return true when the server responds with 401 or 403, false for other responses or connection failures
+     */
+    fun isAuthRequiredOnPort(port: Int, hostname: String = "127.0.0.1"): Boolean {
+        return try {
+            val url = java.net.URL("http://$hostname:$port/api/info")
+            val connection = url.openConnection(Proxy.NO_PROXY) as java.net.HttpURLConnection
+            try {
+                connection.connectTimeout = CONNECT_TIMEOUT_MS
+                connection.readTimeout = READ_TIMEOUT_MS
+                connection.requestMethod = "GET"
+                connection.instanceFollowRedirects = false
+                val responseCode = connection.responseCode
+                responseCode == 401 || responseCode == 403
+            } finally {
+                connection.disconnect()
+            }
+        } catch (e: Exception) {
+            logger.debug("Authentication check failed for $hostname:$port: ${e.message}")
+            false
+        }
+    }
+
+    /**
      * Scans for a running OpenCode server in the port range.
      * @return The port number if a running server is found, null otherwise
      */

@@ -46,6 +46,26 @@ class OpenCodeServiceCommandTest {
         assertFalse(command.contains("s3cure"))
     }
 
+    @Test
+    fun omitsServerUrlAndCredentialsWhenUsingServiceDiscoveryAuth() {
+        assumeFalse(System.getProperty("os.name", "").lowercase().contains("windows"))
+
+        val command = newService().buildOpenCodeCommand(
+            command = "/usr/local/bin/opencode",
+            h = "127.0.0.1",
+            p = 49374,
+            pwd = "should-not-appear",
+            cont = true,
+            useServiceDiscoveryAuth = true
+        )
+
+        assertEquals("'/usr/local/bin/opencode' --continue", command)
+        assertFalse(command.contains("OPENCODE_PASSWORD"))
+        assertFalse(command.contains("OPENCODE_SERVER_PASSWORD"))
+        assertFalse(command.contains("should-not-appear"))
+        assertFalse(command.contains("--server"))
+    }
+
     private fun newService(): OpenCodeService {
         val project = Proxy.newProxyInstance(
             Project::class.java.classLoader,

@@ -1,5 +1,7 @@
 .gradle
 build/
+.atl/
+odd/
 !gradle/wrapper/gradle-wrapper.jar
 !**/src/main/**/build/
 !**/src/test/**/build/
@@ -44,4 +46,4 @@ bin/
 ### Mac OS ###
 .DS_Store
 sdk
-cursor_ui
+cursor_uiodd/

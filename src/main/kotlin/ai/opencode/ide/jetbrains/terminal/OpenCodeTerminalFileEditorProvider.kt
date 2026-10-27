@@ -110,6 +110,17 @@ class OpenCodeTerminalFileEditorProvider : FileEditorProvider, DumbAware {
             if (widget != null) {
                 logger.debug("Disposing terminal widget for file: ${file.name}")
                 try {
+                    // Terminate the shell (and the opencode client running inside it) so a
+                    // disposed tab does not leave an orphan TUI client process behind.
+                    val process = widget.processTtyConnector?.process
+                    if (process?.isAlive == true) {
+                        process.destroy()
+                        if (!process.waitFor(2, TimeUnit.SECONDS)) process.destroyForcibly()
+                    }
+                } catch (e: Exception) {
+                    logger.warn("Error terminating terminal process for ${file.name}", e)
+                }
+                try {
                     widget.dispose()
                 } catch (e: Exception) {
                     logger.warn("Error disposing terminal widget", e)

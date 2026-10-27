@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "ai.opencode"
-version = "1.1.2"
+version = "1.1.6"
 
 repositories {
     mavenCentral()

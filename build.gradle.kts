@@ -46,6 +46,18 @@ intellijPlatform {
         }
 
         changeNotes = """
+            <h2>1.2.0</h2>
+            <ul>
+                <li>New: Typed server health check — a non-OpenCode service on the same port is no longer mistaken for a live server, and auth failures no longer trigger automatic restarts.</li>
+                <li>New: Server lifecycle ownership — Stop only terminates a server started by the plugin; shared v2 services are disconnected, never killed.</li>
+                <li>New: Conservative auto-revive — the shared service identity is re-verified before re-attaching, and you are notified instead of silently starting a private replacement.</li>
+                <li>New: Version gate — warns once per project when the connected server is not a v2 major version.</li>
+                <li>New: Service discovery cache, with a bounded deadline when reading service.json.</li>
+                <li>New: Windows CLI resolution behind .cmd shims, with shell-aware launch commands.</li>
+                <li>Fix: File diffs are rebuilt from the v2 patch field; the legacy before/after contract is no longer relied upon.</li>
+                <li>Fix: The web tab opens a single JCEF browser instead of two.</li>
+                <li>Fix: Authentication no longer scans process environments for credentials.</li>
+            </ul>
             <h2>1.1.2</h2>
             <ul>
                 <li>Fix: Reuse remembered or detected live local OpenCode servers and open the local terminal on the first successful connection.</li>

@@ -1,7 +1,7 @@
 plugins {
     id("java")
-    id("org.jetbrains.kotlin.jvm") version "2.1.20"
-    id("org.jetbrains.intellij.platform") version "2.10.2"
+    id("org.jetbrains.kotlin.jvm") version "2.2.20"
+    id("org.jetbrains.intellij.platform") version "2.20.0"
 }
 
 group = "ai.opencode"
@@ -31,9 +31,8 @@ dependencies {
     }
 
     // HTTP client and JSON
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("com.squareup.okhttp3:okhttp-sse:4.12.0")
-    implementation("com.google.code.gson:gson:2.11.0")
+    implementation("com.squareup.okhttp3:okhttp:5.5.1")
+    implementation("com.google.code.gson:gson:2.14.0")
     
     testImplementation("junit:junit:4.13.2")
 }
@@ -77,17 +76,16 @@ intellijPlatform {
 
     pluginVerification {
         ides {
-            ide("IC", "2025.2.4")
+            create("IC", "2025.2.4")
         }
     }
 }
 
 tasks {
-    // Set the JVM compatibility versions
-    withType<JavaCompile> {
-        sourceCompatibility = "17"
-        targetCompatibility = "17"
-    }
+    // The IntelliJ Platform Gradle Plugin applies the platform JDK toolchain (21 for 2025.2+),
+    // and that toolchain drives both the Java and the Kotlin target. Do not override one side
+    // alone: a mismatched jvmTarget fails the build, and a lower target than the platform's
+    // JDK no longer buys compatibility because sinceBuild = 252 already requires JBR 21.
 
     withType<org.jetbrains.intellij.platform.gradle.tasks.RunIdeTask> {
         systemProperty("ide.no.platform.update", "true")
@@ -100,7 +98,5 @@ tasks {
 }
 
 kotlin {
-    compilerOptions {
-        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
-    }
+    // jvmTarget follows the IntelliJ Platform toolchain; see the note in the tasks block.
 }

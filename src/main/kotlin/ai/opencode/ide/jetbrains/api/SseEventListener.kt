@@ -113,7 +113,7 @@ class SseEventListener(
                     logger.info("[SSE] Connection established")
 
                     try {
-                        val source = response.body?.source() ?: throw IOException("SSE response has no body")
+                        val source = response.body.source()
                         val eventData = StringBuilder()
                         var eventName: String? = null
                         while (!source.exhausted() && !call.isCanceled()) {

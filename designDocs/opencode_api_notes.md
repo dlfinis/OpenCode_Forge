@@ -1,5 +1,7 @@
 ## OpenCode Server API 学习笔记
 
+> Runtime contract checked against OpenCode v2.2.0 on 2026-10-27; details and remaining limits are recorded at the end.
+
 > 参考来源：
 > - 官方文档：https://opencode.ai/docs/server/
 > - JS SDK：`sdk/js/src/gen/types.gen.ts`、`sdk/js/src/gen/sdk.gen.ts`
@@ -8,7 +10,7 @@
 
 ## 总览
 
-- Server 提供 OpenAPI 3.1（`/doc`），同时生成 JS SDK。
+- Server 提供 OpenAPI 3.1（`/openapi.json`），同时生成 JS SDK。
 - SSE 事件可通过 `/event?directory=` 订阅，或者 `/global/event` 获取全局事件。
 - 会话相关 API 位于 `/session`，其中 `messageID` 是 diff 与 session 操作的重要关联点。
 
@@ -27,9 +29,10 @@
 
 ### Diff
 
-- `GET /session/:id/diff?directory=&messageID?`
-  - `messageID` **可选但重要**，用于定位某次消息产生的 diff。
-  - 未传 `messageID` 时，可能返回该 session 的历史 diff（导致误报）。
+- `GET /session/:id/diff?from=&to=&context=`
+  - v2 uses the optional `from` query parameter (the message ID) to locate a turn's diff.
+  - Omitting `from` may return historical session diffs and create false positives.
+  - v2 `FileDiff.Info` requires `patch`; the plugin reconstructs `before` / `after` from the unified patch. It does not rely on the v1 `before` / `after` response fields.
 
 ### 其他关键 Session 操作
 
@@ -100,10 +103,23 @@
 ## 本插件当前 API 使用点（复核）
 
 - `/event?directory=`：SSE 事件订阅
-- `/global/health`：健康检查
+- `/api/info`：健康检查；v2.2.0 返回裸对象，不含 `{data: ...}` 包装
 - `/session/status`：寻找 busy session
 - `/session`：获取最新 session
 - `/session/:id`：获取 session summary（diff fallback）
-- `/session/:id/diff?messageID?`：展示 diff
-- `/tui/append-prompt`：向 TUI 追加命令
+- `/session/:id/diff?from=`：展示 diff，并从 v2 的 `patch` 字段重建前后内容
+- `@` 文件引用通过终端 TTY 发送；没有 HTTP `/tui/append-prompt` 调用点
 
+---
+
+## v2.2.0 本机运行时核对（2026-10-27）
+
+An OpenCode service was already running, so this verification used read-only queries and did not start or restart it. `opencode --version` returned `opencode v2.2.0`, and `opencode service status` returned `http://127.0.0.1:49374`. Authenticated requests to `/openapi.json` and `/api/info` both returned HTTP 200; the local `service.json` password was neither printed nor recorded.
+
+| 项目 | 运行时证据 |
+|---|---|
+| `/tui/append-prompt` | v2.2.0 OpenAPI 中不存在该路径；仓库源码没有 HTTP 调用点。选择内容仍通过终端 TTY 发送。 |
+| Diff | `GET /api/session/{sessionID}/diff` 返回 `{data: FileDiff.Info[]}`；该 schema 要求 `patch`、`file`、`additions`、`deletions`、`status`，不含 v1 的 `before` / `after`。反序列化器以 `patch` 为权威来源。 |
+| `/api/info` | HTTP 200，顶层字段为 `capabilities`、`hostname`、`paths`、`pid`、`urls`、`version`，没有 `data` 包装。 |
+
+Note: the repository-root `openapi.json` is an older snapshot with `info.version=0.0.3` and still includes `/tui/append-prompt`. It does not match the installed v2.2.0 runtime and should not be used as the current service contract.

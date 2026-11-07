@@ -1,6 +1,7 @@
 package ai.opencode.ide.jetbrains.api
 
 import ai.opencode.ide.jetbrains.api.models.*
+import ai.opencode.ide.jetbrains.util.OpenCodeServerInfo
 import ai.opencode.ide.jetbrains.util.PathUtil
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
@@ -101,15 +102,11 @@ open class OpenCodeApiClient(
         return gson.fromJson(payload, Session::class.java)
     }
 
-    fun checkHealth(directory: String): Boolean {
-        return try {
-            val url = "$baseUrl/api/info"
-            val request = Request.Builder().url(url).get().build()
-            client.newCall(request).execute().use { it.isSuccessful }
-        } catch (e: Exception) {
-            false
-        }
-    }
+    fun getServerInfo(): OpenCodeServerInfo? =
+        get<JsonElement>(apiUrl("/info"), JsonElement::class.java)
+            ?.let { OpenCodeServerInfo.parse(it.toString()) }
+
+    fun checkHealth(directory: String): Boolean = getServerInfo() != null
 
     fun createEventListener(
         directory: String,

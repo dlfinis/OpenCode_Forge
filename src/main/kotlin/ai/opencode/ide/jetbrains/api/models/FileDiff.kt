@@ -28,13 +28,11 @@ class FileDiffDeserializer : JsonDeserializer<FileDiff> {
         val obj = json.asJsonObject
         val patch = obj.get("patch")?.takeIf { it.isJsonPrimitive }?.asString.orEmpty()
         val parsedPatch = parseUnifiedPatch(patch)
-        val hasBefore = obj.has("before") && !obj.get("before").isJsonNull
-        val hasAfter = obj.has("after") && !obj.get("after").isJsonNull
 
         return FileDiff(
             file = decodeGoQuotedString(obj.get("file")?.asString ?: ""),
-            before = if (hasBefore) obj.get("before").asString else parsedPatch.before,
-            after = if (hasAfter) obj.get("after").asString else parsedPatch.after,
+            before = parsedPatch.before,
+            after = parsedPatch.after,
             additions = obj.get("additions")?.asInt ?: 0,
             deletions = obj.get("deletions")?.asInt ?: 0,
             status = obj.get("status")?.takeIf { it.isJsonPrimitive }?.asString ?: "modified"

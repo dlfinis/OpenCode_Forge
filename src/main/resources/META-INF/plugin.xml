@@ -73,7 +73,8 @@
 
     <!-- File Editor Provider -->
     <fileEditorProvider implementation="ai.opencode.ide.jetbrains.terminal.OpenCodeTerminalFileEditorProvider"/>
-    <fileEditorProvider implementation="ai.opencode.ide.jetbrains.web.OpenCodeWebFileEditorProvider"/>
+    <!-- Web provider is registered only in opencode-web-support.xml (optional JCEF config-file);
+         registering it here as well creates two JCEF browsers per web tab. -->
 
     <!-- Notifications -->
     <notificationGroup id="OpenCode" displayType="BALLOON"/>

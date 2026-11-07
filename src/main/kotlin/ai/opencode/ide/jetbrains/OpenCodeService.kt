@@ -14,6 +14,7 @@ import ai.opencode.ide.jetbrains.ui.OpenCodeConnectDialog
 import ai.opencode.ide.jetbrains.ui.chooseConnectionAddress
 import ai.opencode.ide.jetbrains.util.PathUtil
 import ai.opencode.ide.jetbrains.util.OpenCodeHealthResult
+import ai.opencode.ide.jetbrains.util.OpenCodeLegacyProbe
 import ai.opencode.ide.jetbrains.util.OpenCodeVersionGate
 import ai.opencode.ide.jetbrains.util.OpenCodeCliResolver
 import ai.opencode.ide.jetbrains.util.OpenCodeTerminalCommand
@@ -874,6 +875,10 @@ class OpenCodeService(private val project: Project) : Disposable {
                 discovery = ServiceDiscovery.discoverSharedServer()
             }
             val occupied = local && health !is OpenCodeHealthResult.Healthy && !PortFinder.isPortAvailable(p)
+            // Diagnostic only, and deliberately on this background thread: a v1 server answers
+            // HTTP but has no /api/info, so it would otherwise be reported as an unverified
+            // service and the user could connect to a session where every call returns 404.
+            val legacyV1 = local && occupied && OpenCodeLegacyProbe.isVersionOneServer(safeH, p)
 
             ApplicationManager.getApplication().invokeLater {
                 if (!local) {
@@ -922,7 +927,9 @@ class OpenCodeService(private val project: Project) : Disposable {
                     }
 
                     is OpenCodeHealthResult.ForeignService -> {
-                        if (occupied) {
+                        if (legacyV1) {
+                            showLegacyV1NotSupported(p)
+                        } else if (occupied) {
                             offerConnectionToUnverifiedService(safeH, p, auth, web, customBasePath)
                         } else {
                             sendNotification(
@@ -992,6 +999,21 @@ class OpenCodeService(private val project: Project) : Disposable {
             connection.customBasePath ?: customBasePath,
             allowCredentialPrompt = false
         )
+    }
+
+    /**
+     * A v1 server answers HTTP but has no `/api/info`, so it would otherwise be offered as an
+     * unverified service. Connecting to it produces a session where every call returns 404,
+     * which looks like a broken plugin rather than an unsupported server.
+     */
+    private fun showLegacyV1NotSupported(port: Int) {
+        Messages.showErrorDialog(
+            project,
+            "The server on :$port is OpenCode v1, and this plugin requires OpenCode v2.\n\n" +
+                "Upgrade the CLI (https://opencode.ai/download), restart the server, then reconnect.",
+            "OpenCode v1 Not Supported"
+        )
+        showConnectionDialog()
     }
 
     private fun offerConnectionToUnverifiedService(

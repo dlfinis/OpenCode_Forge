@@ -40,6 +40,7 @@ Click the **OpenCode** icon in the right sidebar to instantly focus or create an
 
 - **JetBrains IDE**: IntelliJ IDEA, WebStorm, PyCharm, etc. (2025.2+)
 - **OpenCode CLI**: Install the v2 CLI with `curl -fsSL https://opencode.ai/v2/install | bash` or see [opencode.ai/download](https://opencode.ai/download)
+- **OpenCode v2 only**: the plugin talks to the v2 server API (`/api/info`, `/api/session`, `patch`-based diffs). A v1 server is detected and reported as unsupported — upgrade the CLI first.
 
 ## Installation
 

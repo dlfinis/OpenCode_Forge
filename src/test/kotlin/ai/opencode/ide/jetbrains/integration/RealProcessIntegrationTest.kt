@@ -47,7 +47,14 @@ class RealProcessIntegrationTest : BasePlatformTestCase() {
         }.start()
         
         // Wait for port to be open and HEALTHY
-        val ready = PortFinder.waitForPort(port, "127.0.0.1", 15000, true)
+        val ready = PortFinder.waitForPort(
+            port,
+            "127.0.0.1",
+            15000,
+            true,
+            username = "opencode",
+            password = serverPassword
+        )
         if (!ready) {
             throw IllegalStateException("opencode server failed to start on port $port")
         }

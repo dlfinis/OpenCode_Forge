@@ -12,13 +12,20 @@ class ServiceDiscoveryTest {
         val server = ServiceDiscovery.parseServiceJson(
             """{"id":"fa8b4fc4","version":"2.2.0","url":"http://127.0.0.1:49374","pid":79784,"password":"secret"}"""
         )
-        assertEquals(ServiceDiscovery.SharedServer("127.0.0.1", 49374, "secret"), server)
+        assertEquals("127.0.0.1", server?.hostname)
+        assertEquals(49374, server?.port)
+        assertEquals("secret", server?.password)
+        assertEquals("79784", server?.pid)
+        assertEquals("http://127.0.0.1:49374", server?.url)
     }
 
     @Test
     fun parsesConfigOverrideShapeWithHostnameAndPort() {
         val server = ServiceDiscovery.parseServiceJson("""{"hostname":"127.0.0.1","port":45278,"password":""}""")
-        assertEquals(ServiceDiscovery.SharedServer("127.0.0.1", 45278, null), server)
+        assertEquals("127.0.0.1", server?.hostname)
+        assertEquals(45278, server?.port)
+        assertNull(server?.password)
+        assertEquals("http://127.0.0.1:45278", server?.url)
     }
 
     @Test

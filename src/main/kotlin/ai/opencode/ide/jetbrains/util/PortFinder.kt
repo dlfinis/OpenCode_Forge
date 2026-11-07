@@ -4,6 +4,7 @@ import com.intellij.openapi.diagnostic.Logger
 import java.io.IOException
 import java.net.Proxy
 import java.net.ServerSocket
+import java.nio.charset.StandardCharsets
 
 /**
  * Utility for finding available ports for OpenCode server.
@@ -72,58 +73,53 @@ object PortFinder {
         hostname: String = "127.0.0.1",
         username: String? = null,
         password: String? = null
-    ): Boolean {
+    ): OpenCodeHealthResult = isOpenCodeRunningOnPortWithTimeout(port, hostname, username, password, null)
+
+    /** Checks health with a bounded timeout budget, used by deadline-limited discovery. */
+    internal fun isOpenCodeRunningOnPortWithTimeout(
+        port: Int,
+        hostname: String,
+        username: String?,
+        password: String?,
+        timeoutMs: Int?
+    ): OpenCodeHealthResult {
+        var connection: java.net.HttpURLConnection? = null
         return try {
             val url = java.net.URL("http://$hostname:$port/api/info")
-            val connection = url.openConnection(Proxy.NO_PROXY) as java.net.HttpURLConnection
-            connection.connectTimeout = CONNECT_TIMEOUT_MS
-            connection.readTimeout = READ_TIMEOUT_MS
+            connection = url.openConnection(Proxy.NO_PROXY) as java.net.HttpURLConnection
+            val timeoutBudget = timeoutMs?.coerceAtLeast(2)
+            val connectTimeout = timeoutBudget?.let { minOf(CONNECT_TIMEOUT_MS, (it / 2).coerceAtLeast(1)) }
+                ?: CONNECT_TIMEOUT_MS
+            val readTimeout = timeoutBudget?.let { minOf(READ_TIMEOUT_MS, (it - connectTimeout).coerceAtLeast(1)) }
+                ?: READ_TIMEOUT_MS
+            connection.connectTimeout = connectTimeout
+            connection.readTimeout = readTimeout
             connection.requestMethod = "GET"
             connection.instanceFollowRedirects = false
             
             if (username != null && password != null) {
                 val credentials = "$username:$password"
-                val encodedCredentials = java.util.Base64.getEncoder().encodeToString(credentials.toByteArray())
+                val encodedCredentials = java.util.Base64.getEncoder()
+                    .encodeToString(credentials.toByteArray(StandardCharsets.UTF_8))
                 connection.setRequestProperty("Authorization", "Basic $encodedCredentials")
             }
             
             val responseCode = connection.responseCode
-            connection.disconnect()
-            
-            val isHealthy = responseCode == 200 || responseCode == 401 || responseCode == 403
-            if (!isHealthy) {
-                logger.debug("Health check failed for $hostname:$port. Response code: $responseCode")
+            val responseBody = if (responseCode == 200) {
+                connection.inputStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
+            } else {
+                null
             }
-            isHealthy
+            OpenCodeHealthClassifier.fromResponse(responseCode, responseBody).also { result ->
+                if (result !is OpenCodeHealthResult.Healthy) {
+                    logger.debug("Health check for $hostname:$port returned $result")
+                }
+            }
         } catch (e: Exception) {
             logger.debug("Health check failed for $hostname:$port. Error: ${e.message}")
-            false
-        }
-    }
-
-    /**
-     * Checks whether the OpenCode server requires authentication when accessed without credentials.
-     * Uses Proxy.NO_PROXY to bypass system proxy settings.
-     *
-     * @return true when the server responds with 401 or 403, false for other responses or connection failures
-     */
-    fun isAuthRequiredOnPort(port: Int, hostname: String = "127.0.0.1"): Boolean {
-        return try {
-            val url = java.net.URL("http://$hostname:$port/api/info")
-            val connection = url.openConnection(Proxy.NO_PROXY) as java.net.HttpURLConnection
-            try {
-                connection.connectTimeout = CONNECT_TIMEOUT_MS
-                connection.readTimeout = READ_TIMEOUT_MS
-                connection.requestMethod = "GET"
-                connection.instanceFollowRedirects = false
-                val responseCode = connection.responseCode
-                responseCode == 401 || responseCode == 403
-            } finally {
-                connection.disconnect()
-            }
-        } catch (e: Exception) {
-            logger.debug("Authentication check failed for $hostname:$port: ${e.message}")
-            false
+            OpenCodeHealthClassifier.fromFailure(e)
+        } finally {
+            connection?.disconnect()
         }
     }
 
@@ -137,7 +133,7 @@ object PortFinder {
 
     internal fun findRunningOpenCodeServer(ports: IntRange): Int? {
         for (port in ports) {
-            if (isOpenCodeRunningOnPort(port)) {
+            if (isOpenCodeRunningOnPort(port) is OpenCodeHealthResult.Healthy) {
                 return port
             }
         }
@@ -150,18 +146,21 @@ object PortFinder {
      * @param timeoutMs Maximum time to wait in milliseconds
      * @return true if port became available, false if timed out
      */
+    @JvmOverloads
     fun waitForPort(
         port: Int,
         host: String = "127.0.0.1",
         timeoutMs: Long = 10000,
-        requireHealth: Boolean = true
+        requireHealth: Boolean = true,
+        username: String? = null,
+        password: String? = null
     ): Boolean {
         logger.info("Waiting for port $host:$port (timeout=${timeoutMs}ms, requireHealth=$requireHealth)")
         val startTime = System.currentTimeMillis()
         while (System.currentTimeMillis() - startTime < timeoutMs) {
             val ready = if (requireHealth) {
                 // Important: Health check implies HTTP connectivity and OpenCode readiness.
-                isOpenCodeRunningOnPort(port, host)
+                isOpenCodeRunningOnPort(port, host, username, password) is OpenCodeHealthResult.Healthy
             } else {
                 isPortOpen(host, port)
             }

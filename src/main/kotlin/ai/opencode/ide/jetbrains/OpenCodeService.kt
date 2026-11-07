@@ -13,8 +13,16 @@ import ai.opencode.ide.jetbrains.terminal.OpenCodeTerminalVirtualFile
 import ai.opencode.ide.jetbrains.ui.OpenCodeConnectDialog
 import ai.opencode.ide.jetbrains.ui.chooseConnectionAddress
 import ai.opencode.ide.jetbrains.util.PathUtil
+import ai.opencode.ide.jetbrains.util.OpenCodeHealthResult
+import ai.opencode.ide.jetbrains.util.OpenCodeVersionGate
+import ai.opencode.ide.jetbrains.util.OpenCodeCliResolver
+import ai.opencode.ide.jetbrains.util.OpenCodeTerminalCommand
 import ai.opencode.ide.jetbrains.util.PortFinder
 import ai.opencode.ide.jetbrains.util.ProcessAuthDetector
+import ai.opencode.ide.jetbrains.util.ReviveAction
+import ai.opencode.ide.jetbrains.util.LocalServerSpawnCoordinator
+import ai.opencode.ide.jetbrains.util.ServerLifecyclePolicy
+import ai.opencode.ide.jetbrains.util.ServerOwnership
 import ai.opencode.ide.jetbrains.util.ServiceDiscovery
 import ai.opencode.ide.jetbrains.web.OpenCodeWebVirtualFile
 import ai.opencode.ide.jetbrains.web.WebModeSupport
@@ -42,6 +50,7 @@ import com.intellij.ui.SystemNotifications
 import com.intellij.util.concurrency.AppExecutorUtil
 
 import org.jetbrains.plugins.terminal.TerminalView
+import org.jetbrains.plugins.terminal.TerminalProjectOptionsProvider
 
 import java.nio.charset.StandardCharsets
 import java.security.SecureRandom
@@ -65,6 +74,7 @@ class OpenCodeService(private val project: Project) : Disposable {
         private const val RETRY_INTERVAL_MS = 5000L
         private const val BARRIER_TIMEOUT_MS = 2000L
         private const val GENERATED_PASSWORD_PROPERTY = "opencode.generatedPassword"
+        private const val VERSION_WARNING_SHOWN_PROPERTY = "opencode.versionWarningShown"
         private const val PASSWORD_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
         private const val GENERATED_PASSWORD_LENGTH = 24
         private val PASSWORD_RANDOM = SecureRandom()
@@ -83,6 +93,10 @@ class OpenCodeService(private val project: Project) : Disposable {
     private var apiClient: OpenCodeApiClient? = null
     private var sseListener: SseEventListener? = null
     @Volatile private var localServerProcess: OSProcessHandler? = null
+    @Volatile private var ownedServerPort: Int? = null
+    private val spawnOwnerToken = Any()
+    @Volatile private var serverOwnership: ServerOwnership = ServerOwnership.ATTACHED
+    @Volatile private var sharedServerIdentity: ServiceDiscovery.SharedServer? = null
     private val isConnected = AtomicBoolean(false)
     private val isConnecting = AtomicBoolean(false)
     @Volatile private var reviveAttempted = false
@@ -133,7 +147,11 @@ class OpenCodeService(private val project: Project) : Disposable {
 
     fun focusOrCreateTerminal(interactive: Boolean = false) {
         val uiOpen = hasTerminalUI()
-        val running = port?.let { PortFinder.isOpenCodeRunningOnPort(it, hostname, username, password) } ?: false
+        val activePort = port
+        val running = activePort?.let {
+            PortFinder.isOpenCodeRunningOnPort(it, hostname, username, password) is OpenCodeHealthResult.Healthy
+        } ?: false
+        if (activePort != null && hostname in LOCAL_HOSTS && !running) ServiceDiscovery.invalidateCache()
         if (isConnected.get() && !running) isConnected.set(false)
         
         when {
@@ -156,17 +174,31 @@ class OpenCodeService(private val project: Project) : Disposable {
     fun stopLocalServer() {
         AppExecutorUtil.getAppExecutorService().submit {
             val activePort = port ?: return@submit
-            if (hostname !in LOCAL_HOSTS) {
-                logger.warn("[OpenCode] Stop action ignored for remote server $hostname:$activePort")
-                return@submit
-            }
-            terminateLocalServerOnPort(activePort)
-            ApplicationManager.getApplication().invokeLater {
-                if (project.isDisposed) return@invokeLater
-                disconnectAndReset(terminateServer = false)
-                sendNotification(
-                    "OpenCode Server Stopped",
-                    "The OpenCode server on :$activePort was stopped."
+            LocalServerSpawnCoordinator.withPortLock(activePort) {
+                ServiceDiscovery.invalidateCache()
+                val ownership = serverOwnership
+                ServerLifecyclePolicy.performStop(
+                    ownership,
+                    terminateOwnedServer = {
+                        terminateOwnedServer(activePort)
+                        LocalServerSpawnCoordinator.release(activePort, spawnOwnerToken)
+                    },
+                    disconnectClients = {
+                        ApplicationManager.getApplication().invokeLater {
+                            if (project.isDisposed) return@invokeLater
+                            disconnectAndReset(terminateServer = false)
+                            val content = when (ownership) {
+                                ServerOwnership.OWNED -> "The OpenCode server on :$activePort was stopped."
+                                ServerOwnership.SHARED -> "Disconnected from the shared OpenCode service on :$activePort; it remains running."
+                                ServerOwnership.ATTACHED -> "Disconnected from OpenCode on :$activePort; the server remains running."
+                                ServerOwnership.REMOTE -> "Disconnected from the remote OpenCode server on :$activePort; it remains running."
+                            }
+                            sendNotification(
+                                if (ownership == ServerOwnership.OWNED) "OpenCode Server Stopped" else "OpenCode Disconnected",
+                                content
+                            )
+                        }
+                    }
                 )
             }
         }
@@ -484,7 +516,9 @@ class OpenCodeService(private val project: Project) : Disposable {
         if (isConnected.get() || !isConnecting.compareAndSet(false, true)) return
         try {
             apiClient?.let {
-                if (it.checkHealth(project.basePath!!)) {
+                val serverInfo = it.getServerInfo()
+                if (serverInfo != null) {
+                    warnIfUnsupportedServerVersion(serverInfo.version)
                     remoteReconnectFailures = 0
                     reviveAttempted = false
                     wasEverConnected = true
@@ -500,6 +534,19 @@ class OpenCodeService(private val project: Project) : Disposable {
         }
     }
 
+    private fun warnIfUnsupportedServerVersion(version: String) {
+        val properties = PropertiesComponent.getInstance(project)
+        val alreadyShown = properties.getValue(VERSION_WARNING_SHOWN_PROPERTY, "false").toBoolean()
+        if (!OpenCodeVersionGate.shouldWarn(version, alreadyShown)) return
+
+        properties.setValue(VERSION_WARNING_SHOWN_PROPERTY, "true")
+        sendNotification(
+            "OpenCode Version Warning",
+            "This plugin targets OpenCode v2, but the connected server reports version $version. The connection will continue.",
+            NotificationType.WARNING
+        )
+    }
+
     private fun handleConnectionFailure() {
         if (lastMode == ConnectionMode.NONE || !wasEverConnected) return
         if (attemptAutomaticRevive()) return
@@ -513,38 +560,87 @@ class OpenCodeService(private val project: Project) : Disposable {
         val revivePort = port ?: return false
         if (!PortFinder.isPortAvailable(revivePort)) return false
 
+        val expectedOwnership = serverOwnership
+        val expectedSharedServer = sharedServerIdentity
         reviveAttempted = true
         AppExecutorUtil.getAppExecutorService().submit {
             try {
                 val activePort = port ?: return@submit
-                if (activePort != revivePort || hostname != reviveHost || !PortFinder.isPortAvailable(activePort)) {
+                if (activePort != revivePort || hostname != reviveHost || serverOwnership != expectedOwnership ||
+                    !PortFinder.isPortAvailable(activePort)
+                ) {
                     return@submit
                 }
 
-                // v2 architecture: if the shared background service is alive on a different
-                // port, reattach to it instead of spawning a private replacement server.
-                val shared = ServiceDiscovery.findSharedServer()
-                if (shared != null && shared.port != activePort) {
-                    ApplicationManager.getApplication().invokeLater {
-                        if (project.isDisposed) return@invokeLater
-                        lastMode = if (lastMode == ConnectionMode.WEB) ConnectionMode.WEB else ConnectionMode.TERMINAL
-                        connectToExistingServer(shared.hostname, shared.port, ProcessAuthDetector.ServerAuth("opencode", shared.password), true, false)
-                        sendNotification(
-                            "OpenCode Server Reattached",
-                            "Reattached to the shared OpenCode service on :${shared.port}."
-                        )
+                val discovery = if (expectedOwnership == ServerOwnership.SHARED) {
+                    ServiceDiscovery.invalidateCache()
+                    ServiceDiscovery.discoverSharedServer()
+                } else {
+                    ServiceDiscovery.DiscoveryResult.Missing
+                }
+                when (val decision = ServerLifecyclePolicy.reviveAction(expectedOwnership, expectedSharedServer, discovery)) {
+                    is ReviveAction.ReattachSharedServer -> {
+                        val shared = decision.server
+                        ApplicationManager.getApplication().invokeLater {
+                            if (project.isDisposed || serverOwnership != expectedOwnership) return@invokeLater
+                            lastMode = if (lastMode == ConnectionMode.WEB) ConnectionMode.WEB else ConnectionMode.TERMINAL
+                            connectToExistingServer(
+                                shared.hostname,
+                                shared.port,
+                                ProcessAuthDetector.ServerAuth("opencode", shared.password),
+                                true,
+                                false,
+                                ownership = ServerOwnership.SHARED,
+                                sharedServer = shared
+                            )
+                            sendNotification(
+                                "OpenCode Server Reattached",
+                                "Reattached to the verified shared OpenCode service on :${shared.port}."
+                            )
+                        }
+                        return@submit
                     }
-                    return@submit
+
+                    is ReviveAction.Abort -> {
+                        ApplicationManager.getApplication().invokeLater {
+                            if (!project.isDisposed) {
+                                sendNotification(
+                                    "OpenCode Server Needs Attention",
+                                    "Automatic restart was skipped: ${decision.reason}. Reconnect or verify the server manually.",
+                                    NotificationType.WARNING
+                                )
+                            }
+                        }
+                        return@submit
+                    }
+
+                    ReviveAction.StartOwnedServer -> Unit
                 }
 
                 val binary = detectOpenCodeBinary() ?: return@submit
                 val serverPassword = password ?: resolveServerPassword(null)
                 val hostForListen = if (reviveHost == "0.0.0.0") "127.0.0.1" else reviveHost
-                if (!startLocalServer(binary, hostForListen, activePort, serverPassword)) {
-                    logger.warn("[OpenCode] Automatic server restart could not start OpenCode")
-                    return@submit
+                val serverReady = LocalServerSpawnCoordinator.withPortLock(activePort) {
+                    if (port != activePort || hostname != reviveHost || serverOwnership != expectedOwnership ||
+                        LocalServerSpawnCoordinator.isManaged(activePort) || !PortFinder.isPortAvailable(activePort)
+                    ) {
+                        return@withPortLock false
+                    }
+                    if (!startLocalServer(binary, hostForListen, activePort, serverPassword)) {
+                        return@withPortLock false
+                    }
+                    PortFinder.waitForPort(
+                        activePort,
+                        hostForListen,
+                        timeoutMs = 30000,
+                        requireHealth = true,
+                        username = if (serverPassword.isNullOrBlank()) null else "opencode",
+                        password = serverPassword
+                    ).also { ready ->
+                        if (!ready) ServiceDiscovery.invalidateCache()
+                    }
                 }
-                if (!PortFinder.waitForPort(activePort, hostForListen, timeoutMs = 30000, requireHealth = true)) {
+                if (!serverReady) {
                     logger.warn("[OpenCode] Automatic server restart timed out for $hostForListen:$activePort")
                     return@submit
                 }
@@ -553,6 +649,8 @@ class OpenCodeService(private val project: Project) : Disposable {
                     if (project.isDisposed || port != activePort || hostname != reviveHost) return@invokeLater
 
                     password = serverPassword
+                    serverOwnership = ServerOwnership.OWNED
+                    sharedServerIdentity = null
                     username = if (serverPassword.isNullOrBlank()) null else "opencode"
                     initializeApiClient(hostForListen, activePort)
 
@@ -683,22 +781,25 @@ class OpenCodeService(private val project: Project) : Disposable {
         if (terminateServer) terminateProcess() else detachLocalServerProcess()
         terminalVirtualFile?.let { OpenCodeTerminalFileEditorProvider.disposeWidget(it, null) }
         terminalVirtualFile = null; terminalEditor = null; terminalEndpoint = null; webVirtualFile = null; port = null; hostname = "127.0.0.1"; apiClient = null
+        if (serverOwnership != ServerOwnership.OWNED || localServerProcess?.process?.isAlive != true) {
+            serverOwnership = ServerOwnership.ATTACHED
+            sharedServerIdentity = null
+            ownedServerPort = null
+            if (localServerProcess?.process?.isAlive != true) localServerProcess = null
+        }
     }
 
     private fun detachLocalServerProcess() {
-        if (localServerProcess?.process?.isAlive == true) localServerProcess = null
+        if (serverOwnership != ServerOwnership.OWNED) localServerProcess = null
     }
 
     private fun terminateProcess() {
         try {
-            val serverHandler = localServerProcess
-            localServerProcess = null
-            if (serverHandler != null) {
-                serverHandler.destroyProcess()
-                val serverProcess = serverHandler.process
-                if (serverProcess.isAlive && !serverProcess.waitFor(2, TimeUnit.SECONDS)) {
-                    serverProcess.destroyForcibly()
-                }
+            val ownedPort = ownedServerPort
+            if (serverOwnership == ServerOwnership.OWNED && ownedPort != null) {
+                terminateOwnedServer(ownedPort)
+            } else if (serverOwnership != ServerOwnership.OWNED) {
+                localServerProcess = null
             }
 
             val process = terminalEditor?.terminalWidget?.processTtyConnector?.process
@@ -733,7 +834,7 @@ class OpenCodeService(private val project: Project) : Disposable {
         val rememberedAddress = OpenCodeConnectDialog.getRememberedAddress()
         val rememberedServerIsLive = rememberedAddress?.takeIf { it.isLocal }?.let {
             val probeHost = if (it.hostname == "0.0.0.0") "127.0.0.1" else it.hostname
-            PortFinder.isOpenCodeRunningOnPort(it.port, probeHost)
+            PortFinder.isOpenCodeRunningOnPort(it.port, probeHost) is OpenCodeHealthResult.Healthy
         } == true
         val discoveredLocalPort = when {
             rememberedServerIsLive -> rememberedAddress?.port
@@ -747,112 +848,300 @@ class OpenCodeService(private val project: Project) : Disposable {
             ?: "127.0.0.1:${PortFinder.findAvailablePort()}"
     }
 
-    private fun processConnectionChoice(h: String, p: Int, pwd: String?, web: Boolean, customBasePath: String? = null) {
+    private fun processConnectionChoice(
+        h: String,
+        p: Int,
+        pwd: String?,
+        web: Boolean,
+        customBasePath: String? = null,
+        allowCredentialPrompt: Boolean = true
+    ) {
         val safeH = h.trim().ifBlank { "127.0.0.1" }
-        val local = safeH in listOf("0.0.0.0", "127.0.0.1", "localhost")
-        
+        val local = safeH in LOCAL_HOSTS
+
         AppExecutorUtil.getAppExecutorService().submit {
-            val shared = if (local) ServiceDiscovery.findSharedServer() else null
-            val a = when {
+            var discovery = if (local) ServiceDiscovery.discoverSharedServer() else ServiceDiscovery.DiscoveryResult.Missing
+            val registeredShared = discovery as? ServiceDiscovery.DiscoveryResult.Registered
+            val sharedOnRequestedPort = registeredShared?.server?.takeIf { it.port == p }
+            val auth = when {
                 !pwd.isNullOrBlank() -> ProcessAuthDetector.ServerAuth("opencode", pwd)
-                // The v2 shared service publishes its password in service.json; reuse it
-                // instead of asking the user to restart a server the plugin doesn't own.
-                local && shared?.port == p -> ProcessAuthDetector.ServerAuth("opencode", shared.password)
-                local -> ProcessAuthDetector.detectAuthForPort(p)
-                else -> ProcessAuthDetector.ServerAuth("opencode", null)
+                sharedOnRequestedPort != null -> ProcessAuthDetector.ServerAuth("opencode", sharedOnRequestedPort.password)
+                else -> ProcessAuthDetector.ServerAuth()
             }
-            val running = if (local) PortFinder.isOpenCodeRunningOnPort(p, safeH, a.username, a.password) else true
-            val occupied = if (local && !running) !PortFinder.isPortAvailable(p) else false
-            val requiresManagedPassword = local && running && pwd.isNullOrBlank() && a.password == null &&
-                PortFinder.isAuthRequiredOnPort(p, safeH)
+            val health = if (local) PortFinder.isOpenCodeRunningOnPort(p, safeH, auth.username, auth.password) else null
+            if (local && health !is OpenCodeHealthResult.Healthy) {
+                ServiceDiscovery.invalidateCache()
+                discovery = ServiceDiscovery.discoverSharedServer()
+            }
+            val occupied = local && health !is OpenCodeHealthResult.Healthy && !PortFinder.isPortAvailable(p)
 
             ApplicationManager.getApplication().invokeLater {
-                if (requiresManagedPassword) {
-                    val choice = Messages.showYesNoDialog(
-                        project,
-                        "The OpenCode server on :$p requires a password the plugin doesn't control. " +
-                            "Restart it with a plugin-managed password?",
-                        "Connection Warning",
-                        "Restart",
-                        "Connect Anyway",
-                        Messages.getWarningIcon()
+                if (!local) {
+                    lastMode = ConnectionMode.REMOTE
+                    connectToExistingServer(
+                        safeH,
+                        p,
+                        auth,
+                        web,
+                        web,
+                        customBasePath,
+                        ownership = ServerOwnership.REMOTE
                     )
-                    if (choice == Messages.YES) {
-                        val resolvedPassword = resolveServerPassword(pwd)
-                        AppExecutorUtil.getAppExecutorService().submit {
-                            terminateLocalServerOnPort(p)
-                            ApplicationManager.getApplication().invokeLater {
-                                if (project.isDisposed) return@invokeLater
-                                lastMode = if (web) ConnectionMode.WEB else ConnectionMode.TERMINAL
-                                val managedAuth = ProcessAuthDetector.ServerAuth("opencode", resolvedPassword)
-                                if (web) {
-                                    createWebTerminal(safeH, p, managedAuth.password, customBasePath)
-                                } else {
-                                    createLocalTerminal(safeH, p, managedAuth.password, customBasePath)
+                    return@invokeLater
+                }
+
+                when (val result = health) {
+                    is OpenCodeHealthResult.Healthy -> {
+                        val isVerifiedShared = registeredShared?.let {
+                            it.health is OpenCodeHealthResult.Healthy && it.server.port == p &&
+                                (pwd.isNullOrBlank() || pwd == it.server.password)
+                        } == true
+                        lastMode = if (web) ConnectionMode.WEB else ConnectionMode.TERMINAL
+                        connectToExistingServer(
+                            safeH,
+                            p,
+                            auth,
+                            web,
+                            web,
+                            customBasePath,
+                            ownership = if (isVerifiedShared) ServerOwnership.SHARED else ServerOwnership.ATTACHED,
+                            sharedServer = if (isVerifiedShared) registeredShared?.server else null
+                        )
+                    }
+
+                    is OpenCodeHealthResult.AuthRequired -> {
+                        if (allowCredentialPrompt) {
+                            promptForServerCredentials(safeH, p, web, customBasePath)
+                        } else {
+                            Messages.showErrorDialog(
+                                project,
+                                "Authentication is still required for OpenCode on :$p. Enter a valid password and reconnect.",
+                                "Authentication Required"
+                            )
+                        }
+                    }
+
+                    is OpenCodeHealthResult.ForeignService -> {
+                        if (occupied) {
+                            offerConnectionToUnverifiedService(safeH, p, auth, web, customBasePath)
+                        } else {
+                            sendNotification(
+                                "OpenCode Service Not Verified",
+                                "The endpoint on :$p did not return a valid OpenCode /api/info response. No server was started.",
+                                NotificationType.WARNING
+                            )
+                        }
+                    }
+
+                    is OpenCodeHealthResult.NotResponding -> {
+                        if (occupied) {
+                            offerConnectionToUnverifiedService(safeH, p, auth, web, customBasePath)
+                        } else {
+                            when (discovery) {
+                                is ServiceDiscovery.DiscoveryResult.Registered -> {
+                                    if (discovery.health is OpenCodeHealthResult.Healthy) {
+                                        connectToSharedServer(discovery.server, web, customBasePath)
+                                    } else if (discovery.health is OpenCodeHealthResult.AuthRequired && allowCredentialPrompt) {
+                                        promptForServerCredentials(
+                                            discovery.server.hostname,
+                                            discovery.server.port,
+                                            web,
+                                            customBasePath
+                                        )
+                                    } else {
+                                        notifySharedServiceNeedsAttention(discovery)
+                                    }
+                                }
+
+                                is ServiceDiscovery.DiscoveryResult.Unavailable -> notifySharedRegistrationUnavailable(discovery)
+
+                                ServiceDiscovery.DiscoveryResult.Missing -> {
+                                    lastMode = if (web) ConnectionMode.WEB else ConnectionMode.TERMINAL
+                                    val serverPassword = resolveServerPassword(pwd)
+                                    if (web) {
+                                        createWebTerminal(safeH, p, serverPassword, customBasePath)
+                                    } else {
+                                        createLocalTerminal(safeH, p, serverPassword, customBasePath)
+                                    }
                                 }
                             }
                         }
-                    } else {
-                        connectToExistingServer(safeH, p, a, web, web, customBasePath)
                     }
-                } else if (running) {
-                    lastMode = if (!local) ConnectionMode.REMOTE else if (web) ConnectionMode.WEB else ConnectionMode.TERMINAL
-                    // Keep remote connections headless unless web mode is requested.
-                    // Attach to an existing local server and open its terminal or web UI; do not start another server.
-                    connectToExistingServer(safeH, p, a, web, web, customBasePath)
-                } else if (occupied) {
-                    val choice = Messages.showYesNoDialog(
-                        project,
-                        "Port $p is in use but did not pass the health check.\nIt might be an older OpenCode version or a different service.\n\nTry to connect anyway?",
-                        "Connection Warning",
-                        "Connect Anyway",
-                        "Cancel",
-                        Messages.getWarningIcon()
-                    )
-                    if (choice == Messages.YES) {
-                        lastMode = if (!local) ConnectionMode.REMOTE else if (web) ConnectionMode.WEB else ConnectionMode.TERMINAL
-                        connectToExistingServer(safeH, p, a, web, web, customBasePath)
-                    } else {
-                        showConnectionDialog()
-                    }
-                } else {
-                    // Not running and not occupied -> Start new server
-                    // v2 architecture: prefer attaching to the shared background service
-                    // instead of spawning a second private server on this machine.
-                    if (shared != null) {
-                        lastMode = if (web) ConnectionMode.WEB else ConnectionMode.TERMINAL
-                        connectToExistingServer(shared.hostname, shared.port, ProcessAuthDetector.ServerAuth("opencode", shared.password), web, web, customBasePath)
-                    } else if (!local) {
-                         // Safety net: If remote host is not running, we cannot "start" it locally.
-                         Messages.showErrorDialog(project, "Cannot connect to remote server $safeH:$p (Not reachable).", "Connection Failed")
-                         showConnectionDialog()
-                    } else {
-                        lastMode = if (web) ConnectionMode.WEB else ConnectionMode.TERMINAL
-                        val resolvedPassword = resolveServerPassword(a.password)
-                        val managedAuth = ProcessAuthDetector.ServerAuth("opencode", resolvedPassword)
-                        if (web) {
-                            createWebTerminal(safeH, p, managedAuth.password, customBasePath)
-                        } else {
-                            createLocalTerminal(safeH, p, managedAuth.password, customBasePath)
-                        }
-                    }
+
+                    null -> Unit
                 }
             }
         }
     }
 
-    private fun connectToExistingServer(h: String, p: Int, a: ProcessAuthDetector.ServerAuth, ui: Boolean, web: Boolean, customBasePath: String? = null) {
-        hostname = h; port = p; username = a.username; password = a.password
+    private fun promptForServerCredentials(host: String, port: Int, web: Boolean, customBasePath: String?) {
+        val connection = OpenCodeConnectDialog.show(project, "$host:$port")
+        if (connection == null) {
+            sendNotification(
+                "Authentication Required",
+                "The server on :$port requires a password. Reconnect and provide the server credentials.",
+                NotificationType.WARNING
+            )
+            return
+        }
+        processConnectionChoice(
+            connection.hostname,
+            connection.port,
+            connection.password,
+            web,
+            connection.customBasePath ?: customBasePath,
+            allowCredentialPrompt = false
+        )
+    }
+
+    private fun offerConnectionToUnverifiedService(
+        host: String,
+        port: Int,
+        auth: ProcessAuthDetector.ServerAuth,
+        web: Boolean,
+        customBasePath: String?
+    ) {
+        val choice = Messages.showYesNoDialog(
+            project,
+            "Port $port is occupied but did not return a valid OpenCode /api/info response. " +
+                "The plugin will not start or stop a process on this port. Connect anyway?",
+            "Connection Warning",
+            "Connect Anyway",
+            "Cancel",
+            Messages.getWarningIcon()
+        )
+        if (choice == Messages.YES) {
+            lastMode = if (web) ConnectionMode.WEB else ConnectionMode.TERMINAL
+            connectToExistingServer(
+                host,
+                port,
+                auth,
+                web,
+                web,
+                customBasePath,
+                ownership = ServerOwnership.ATTACHED
+            )
+        } else {
+            showConnectionDialog()
+        }
+    }
+
+    private fun connectToSharedServer(server: ServiceDiscovery.SharedServer, web: Boolean, customBasePath: String?) {
+        lastMode = if (web) ConnectionMode.WEB else ConnectionMode.TERMINAL
+        connectToExistingServer(
+            server.hostname,
+            server.port,
+            ProcessAuthDetector.ServerAuth("opencode", server.password),
+            web,
+            web,
+            customBasePath,
+            ownership = ServerOwnership.SHARED,
+            sharedServer = server
+        )
+    }
+
+    private fun notifySharedServiceNeedsAttention(result: ServiceDiscovery.DiscoveryResult.Registered) {
+        val description = when (result.health) {
+            is OpenCodeHealthResult.AuthRequired -> "The registered service rejected its stored credentials."
+            is OpenCodeHealthResult.ForeignService -> "The registered endpoint is not a valid OpenCode server."
+            is OpenCodeHealthResult.NotResponding -> "The registered service is not responding."
+            is OpenCodeHealthResult.Healthy -> return
+        }
+        sendNotification(
+            "Shared OpenCode Service Needs Attention",
+            "$description No private server was started automatically; verify the service registration or reconnect manually.",
+            NotificationType.WARNING
+        )
+    }
+
+    private fun notifySharedRegistrationUnavailable(result: ServiceDiscovery.DiscoveryResult.Unavailable) {
+        sendNotification(
+            "Shared OpenCode Service Could Not Be Verified",
+            "The service registration at ${result.path} could not be read (${result.reason}). No private server was started automatically.",
+            NotificationType.WARNING
+        )
+    }
+
+    private fun connectToExistingServer(
+        h: String,
+        p: Int,
+        a: ProcessAuthDetector.ServerAuth,
+        ui: Boolean,
+        web: Boolean,
+        customBasePath: String? = null,
+        ownership: ServerOwnership = ServerOwnership.ATTACHED,
+        sharedServer: ServiceDiscovery.SharedServer? = null
+    ) {
+        hostname = h
+        port = p
+        username = a.username
+        password = a.password
+        val effectiveOwnership = if (
+            ownership == ServerOwnership.ATTACHED && ownedServerPort == p && localServerProcess?.process?.isAlive == true
+        ) {
+            ServerOwnership.OWNED
+        } else {
+            ownership
+        }
+        serverOwnership = effectiveOwnership
+        sharedServerIdentity = if (effectiveOwnership == ServerOwnership.SHARED) sharedServer else null
         if (shouldOpenUiForExistingConnection(h, ui)) {
             if (web) createWebUI(h, p) else createTerminalUIInternal(h, p, a.password, false, customBasePath)
+        } else {
+            ApplicationManager.getApplication().invokeLater { Messages.showInfoMessage(project, "Connected to $h:$p", "OpenCode") }
         }
-        else { ApplicationManager.getApplication().invokeLater { Messages.showInfoMessage(project, "Connected to $h:$p", "OpenCode") } }
-        initializeApiClient(h, p); startConnectionManager()
+        initializeApiClient(h, p)
+        startConnectionManager()
     }
 
     private fun createWebUI(h: String, p: Int) {
         val connectHost = if (h == "0.0.0.0") "127.0.0.1" else h
         webVirtualFile = WebModeSupport.openWebTab(project, connectHost, p, password) {}
+    }
+
+    private fun ensureLocalServer(binary: String, host: String, port: Int, serverPassword: String?): Boolean {
+        return LocalServerSpawnCoordinator.withPortLock(port) {
+            val healthHost = if (host == "0.0.0.0") "127.0.0.1" else host
+            val health = PortFinder.isOpenCodeRunningOnPort(
+                port,
+                healthHost,
+                if (serverPassword.isNullOrBlank()) null else "opencode",
+                serverPassword
+            )
+            if (health !is OpenCodeHealthResult.Healthy) ServiceDiscovery.invalidateCache()
+
+            when (health) {
+                is OpenCodeHealthResult.Healthy -> {
+                    if (LocalServerSpawnCoordinator.isManagedByAnother(port, spawnOwnerToken)) {
+                        serverOwnership = ServerOwnership.ATTACHED
+                        ownedServerPort = null
+                        sharedServerIdentity = null
+                    }
+                    true
+                }
+                is OpenCodeHealthResult.AuthRequired -> {
+                    logger.warn("[OpenCode] Port $port requires credentials; refusing to start or replace its server")
+                    false
+                }
+                is OpenCodeHealthResult.ForeignService -> {
+                    logger.warn("[OpenCode] Port $port is occupied by an unverified service; refusing to start OpenCode")
+                    false
+                }
+                is OpenCodeHealthResult.NotResponding -> {
+                    when {
+                        LocalServerSpawnCoordinator.isManaged(port) -> {
+                            logger.warn("[OpenCode] A plugin-managed server is already starting on port $port")
+                            false
+                        }
+                        PortFinder.isPortAvailable(port) -> startLocalServer(binary, host, port, serverPassword)
+                        else -> {
+                            logger.warn("[OpenCode] Port $port is occupied but not responding as OpenCode; refusing to spawn")
+                            false
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private fun createWebTerminal(h: String, p: Int, pwd: String?, customBasePath: String? = null) {
@@ -864,13 +1153,25 @@ class OpenCodeService(private val project: Project) : Disposable {
                 return@submit
             }
             val connectHost = if (h == "0.0.0.0") "127.0.0.1" else h
-            // Attach to an already-running server (e.g. the v2 shared service) instead of spawning a duplicate.
-            if (!PortFinder.isOpenCodeRunningOnPort(p, connectHost) && !startLocalServer(bin, h, p, serverPassword)) {
-                showCliNotFoundError()
-                return@submit
+            val serverAllowed = LocalServerSpawnCoordinator.withPortLock(p) {
+                if (!ensureLocalServer(bin, h, p, serverPassword)) return@withPortLock false
+                if (!PortFinder.waitForPort(
+                        p,
+                        connectHost,
+                        timeoutMs = 30000,
+                        requireHealth = true,
+                        username = if (serverPassword.isNullOrBlank()) null else "opencode",
+                        password = serverPassword
+                    )
+                ) {
+                    ServiceDiscovery.invalidateCache()
+                    logger.warn("[OpenCode] Initial waitForPort (Web) timed out for $h:$p, starting ConnectionManager anyway")
+                }
+                true
             }
-            if (!PortFinder.waitForPort(p, connectHost, timeoutMs = 30000, requireHealth = true)) {
-                logger.warn("[OpenCode] Initial waitForPort (Web) timed out for $h:$p, starting ConnectionManager anyway")
+            if (!serverAllowed) {
+                showServerStartFailure(p)
+                return@submit
             }
 
             ApplicationManager.getApplication().invokeLater {
@@ -895,7 +1196,15 @@ class OpenCodeService(private val project: Project) : Disposable {
         val safeH = h.trim().ifBlank { "127.0.0.1" }
         if (safeH !in listOf("0.0.0.0", "127.0.0.1", "localhost")) {
             // Guard: Never attempt to spawn local terminal for remote host
-            connectToExistingServer(safeH, p, ProcessAuthDetector.ServerAuth("opencode", pwd), false, false, customBasePath)
+            connectToExistingServer(
+                safeH,
+                p,
+                ProcessAuthDetector.ServerAuth("opencode", pwd),
+                false,
+                false,
+                customBasePath,
+                ownership = ServerOwnership.REMOTE
+            )
             return
         }
         val serverPassword = resolveServerPassword(pwd)
@@ -906,13 +1215,24 @@ class OpenCodeService(private val project: Project) : Disposable {
                 return@submit
             }
             val connectHost = if (safeH == "0.0.0.0") "127.0.0.1" else safeH
-            // Attach to an already-running server (e.g. the v2 shared service) instead of spawning a duplicate.
-            if (!PortFinder.isOpenCodeRunningOnPort(p, connectHost) && !startLocalServer(bin, safeH, p, serverPassword)) {
-                showCliNotFoundError()
-                return@submit
+            val serverAllowed = LocalServerSpawnCoordinator.withPortLock(p) {
+                if (!ensureLocalServer(bin, safeH, p, serverPassword)) return@withPortLock false
+                if (!PortFinder.waitForPort(
+                        p,
+                        connectHost,
+                        timeoutMs = 30000,
+                        username = if (serverPassword.isNullOrBlank()) null else "opencode",
+                        password = serverPassword
+                    )
+                ) {
+                    ServiceDiscovery.invalidateCache()
+                    logger.warn("[OpenCode] Initial waitForPort timed out for $h:$p, starting ConnectionManager anyway")
+                }
+                true
             }
-            if (!PortFinder.waitForPort(p, connectHost, timeoutMs = 30000)) {
-                logger.warn("[OpenCode] Initial waitForPort timed out for $h:$p, starting ConnectionManager anyway")
+            if (!serverAllowed) {
+                showServerStartFailure(p)
+                return@submit
             }
 
             ApplicationManager.getApplication().invokeLater {
@@ -961,112 +1281,58 @@ class OpenCodeService(private val project: Project) : Disposable {
         return generatedPassword
     }
 
-    private fun terminateLocalServerOnPort(port: Int) {
+    private fun terminateOwnedServer(port: Int) {
+        if (serverOwnership != ServerOwnership.OWNED || ownedServerPort != port) {
+            logger.warn("[OpenCode] Refusing to terminate a server not owned on port $port")
+            return
+        }
+
         val handler = localServerProcess
         localServerProcess = null
-        if (handler != null) {
-            val process = handler.process
-            if (process.isAlive) {
-                handler.destroyProcess()
-                try {
-                    if (process.isAlive && !process.waitFor(2, TimeUnit.SECONDS)) {
-                        process.destroyForcibly()
-                        process.waitFor(2, TimeUnit.SECONDS)
-                    }
-                } catch (e: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                }
+        ownedServerPort = null
+        val process = handler?.process
+        if (process?.isAlive != true) return
+
+        handler.destroyProcess()
+        try {
+            if (process.isAlive && !process.waitFor(2, TimeUnit.SECONDS)) {
+                process.destroyForcibly()
+                process.waitFor(2, TimeUnit.SECONDS)
             }
-        }
-
-        if (PortFinder.isPortAvailable(port)) return
-
-        findListenerProcessIds(port).forEach { terminateListenerProcess(it, force = false) }
-        waitForPortRelease(port, timeoutMs = 2000)
-        if (!PortFinder.isPortAvailable(port)) {
-            findListenerProcessIds(port).forEach { terminateListenerProcess(it, force = true) }
-            waitForPortRelease(port, timeoutMs = 1000)
-        }
-        if (!PortFinder.isPortAvailable(port)) {
-            logger.warn("[OpenCode] Port $port remained occupied after attempting to stop its listener")
-        }
-    }
-
-    private fun findListenerProcessIds(port: Int): List<String> {
-        val output = if (isWindows()) {
-            runShortCommand(listOf("netstat", "-ano", "-p", "TCP"), timeoutMs = 3000).orEmpty()
-        } else {
-            runShortCommand(listOf("lsof", "-ti", ":$port", "-sTCP:LISTEN"), timeoutMs = 3000).orEmpty()
-        }
-        val processIds = if (isWindows()) {
-            output.mapNotNull { line ->
-                val columns = line.trim().split(Regex("\\s+"))
-                val localAddress = columns.getOrNull(1)
-                if (columns.getOrNull(0) == "TCP" && columns.getOrNull(3) == "LISTENING" &&
-                    localAddress?.substringAfterLast(':') == port.toString()
-                ) {
-                    columns.getOrNull(4)
-                } else {
-                    null
-                }
-            }
-        } else {
-            output
-        }
-        return processIds.filter { it.matches(Regex("\\d+")) }.distinct()
-    }
-
-    private fun terminateListenerProcess(processId: String, force: Boolean) {
-        if (!processId.matches(Regex("\\d+"))) return
-        val command = if (isWindows()) {
-            listOf("taskkill", "/PID", processId, "/F")
-        } else {
-            listOf("kill", if (force) "-KILL" else "-TERM", processId)
-        }
-        runShortCommand(command, timeoutMs = 2000)
-    }
-
-    private fun waitForPortRelease(port: Int, timeoutMs: Long) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!PortFinder.isPortAvailable(port) && System.currentTimeMillis() < deadline) {
-            try {
-                Thread.sleep(100)
-            } catch (e: InterruptedException) {
-                Thread.currentThread().interrupt()
-                return
-            }
-        }
-    }
-
-    private fun runShortCommand(command: List<String>, timeoutMs: Int): List<String>? {
-        return try {
-            val output = CapturingProcessHandler(GeneralCommandLine(command)).runProcess(timeoutMs)
-            if (output.isTimeout) null else output.stdoutLines
-        } catch (e: Exception) {
-            logger.debug("[OpenCode] Failed to run process command: ${command.firstOrNull()}", e)
-            null
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
         }
     }
 
     private fun startLocalServer(binary: String, h: String, p: Int, pwd: String?): Boolean {
         return try {
-            localServerProcess?.process?.takeIf { it.isAlive }?.let { return true }
+            localServerProcess?.process?.takeIf { it.isAlive }?.let {
+                return serverOwnership == ServerOwnership.OWNED && ownedServerPort == p
+            }
             val commandLine = GeneralCommandLine(listOf(binary, "serve", "--hostname", h, "--port", p.toString()))
             project.basePath?.let(commandLine::withWorkDirectory)
             commandLine.environment["OPENCODE_SERVER_PASSWORD"] = resolveServerPassword(pwd) ?: return false
 
             val handler = OSProcessHandler(commandLine)
+            val processToken = Any()
             handler.addProcessListener(object : ProcessAdapter() {
                 override fun processTerminated(event: ProcessEvent) {
+                    LocalServerSpawnCoordinator.release(p, spawnOwnerToken, processToken)
                     if (localServerProcess === handler) {
                         logger.warn("[OpenCode] Local server exited with code ${event.exitCode}")
                     }
                 }
             })
             localServerProcess = handler
+            ownedServerPort = p
+            serverOwnership = ServerOwnership.OWNED
+            sharedServerIdentity = null
+            LocalServerSpawnCoordinator.markStarted(p, spawnOwnerToken, processToken)
             handler.startNotify()
+            ServiceDiscovery.invalidateCache()
             true
         } catch (e: Exception) {
+            LocalServerSpawnCoordinator.release(p, spawnOwnerToken)
             logger.error("[OpenCode] Failed to start local OpenCode server", e)
             false
         }
@@ -1099,19 +1365,61 @@ class OpenCodeService(private val project: Project) : Disposable {
         terminalEndpoint = target
         // When the target is the v2 shared background service, let the CLI discover
         // and authenticate on its own instead of inlining credentials in the command.
-        val usesServiceDiscoveryAuth = runCatching {
-            ServiceDiscovery.findSharedServer()?.let { it.port == p && it.hostname == endpointHost } == true
-        }.getOrDefault(false)
+        val usesServiceDiscoveryAuth = serverOwnership == ServerOwnership.SHARED &&
+            sharedServerIdentity?.let { it.port == p && it.hostname == endpointHost } == true
         ApplicationManager.getApplication().invokeLater {
             terminalEditor = FileEditorManager.getInstance(project).openFile(f, true).firstOrNull { it is OpenCodeTerminalFileEditor } as? OpenCodeTerminalFileEditor
             terminalEditor?.let { 
-                w.executeCommand(buildOpenCodeCommand(getOpenCodeBinary(), h, p, pwd, cont, usesServiceDiscoveryAuth)); pinTerminalTab(f)
+                resolveTerminalLaunchAsync { binary, shellPath ->
+                    if (project.isDisposed) return@resolveTerminalLaunchAsync
+                    w.executeCommand(
+                        buildOpenCodeCommandForShell(
+                            binary,
+                            h,
+                            p,
+                            pwd,
+                            cont,
+                            usesServiceDiscoveryAuth,
+                            shellPath
+                        )
+                    )
+                    pinTerminalTab(f)
+                }
             }
         }
     }
 
-    internal fun buildOpenCodeCommand(command: String, h: String, p: Int, pwd: String?, cont: Boolean, useServiceDiscoveryAuth: Boolean = false): String {
-        val cmdSafe = if (isWindows()) windowsQuote(command) else shellQuote(command)
+    internal fun buildOpenCodeCommand(
+        command: String,
+        h: String,
+        p: Int,
+        pwd: String?,
+        cont: Boolean,
+        useServiceDiscoveryAuth: Boolean = false
+    ): String = buildOpenCodeCommandForShell(command, h, p, pwd, cont, useServiceDiscoveryAuth, null)
+
+    internal fun buildOpenCodeCommandForShell(
+        command: String,
+        h: String,
+        p: Int,
+        pwd: String?,
+        cont: Boolean,
+        useServiceDiscoveryAuth: Boolean,
+        shellPath: String?
+    ): String {
+        if (isWindows()) {
+            return OpenCodeTerminalCommand.buildWindowsCommand(
+                binary = command,
+                hostname = h,
+                port = p,
+                password = pwd,
+                continueSession = cont,
+                useServiceDiscoveryAuth = useServiceDiscoveryAuth,
+                shell = OpenCodeTerminalCommand.detectShell(shellPath, windows = true)
+            )
+        }
+
+        val cmdSafe = shellQuote(command)
         if (useServiceDiscoveryAuth) {
             // Attached to the v2 shared background service: the CLI discovers the
             // service and its credentials from its own state file, so neither the
@@ -1120,22 +1428,26 @@ class OpenCodeService(private val project: Project) : Disposable {
         }
         val connectHost = if (h == "0.0.0.0") "127.0.0.1" else h
         val serverUrl = "http://$connectHost:$p"
-        val serverUrlSafe = if (isWindows()) windowsQuote(serverUrl) else shellQuote(serverUrl)
+        val serverUrlSafe = shellQuote(serverUrl)
         val base = "$cmdSafe --server $serverUrlSafe${if (cont) " --continue" else ""}"
         if (pwd.isNullOrBlank()) return base
-        return if (isWindows()) {
-            val windowsPassword = pwd.replace("\"", "\\\"")
-            "cmd /c \"set \"OPENCODE_PASSWORD=$windowsPassword\" && " +
-                "set \"OPENCODE_SERVER_PASSWORD=$windowsPassword\" && $base\""
-        } else {
-            val shellPassword = pwd.replace("'", "'\\''")
-            "OPENCODE_PASSWORD='$shellPassword' OPENCODE_SERVER_PASSWORD='$shellPassword' $base"
-        }
+        val shellPassword = pwd.replace("'", "'\\''")
+        return "OPENCODE_PASSWORD='$shellPassword' OPENCODE_SERVER_PASSWORD='$shellPassword' $base"
     }
 
     private fun shellQuote(value: String): String = "'${value.replace("'", "'\\''")}'"
 
-    private fun windowsQuote(value: String): String = "\"${value.replace("\"", "\\\"")}\""
+    private fun resolveTerminalLaunchAsync(onResolved: (binary: String, shellPath: String?) -> Unit) {
+        AppExecutorUtil.getAppExecutorService().submit {
+            val binary = _cachedBinary ?: if (isWindows()) detectOpenCodeBinary() ?: getOpenCodeBinary() else getOpenCodeBinary()
+            val shellPath = runCatching {
+                TerminalProjectOptionsProvider.getInstance(project).shellPath
+            }.getOrNull()
+            ApplicationManager.getApplication().invokeLater {
+                if (!project.isDisposed) onResolved(binary, shellPath)
+            }
+        }
+    }
 
     @Volatile private var _cachedBinary: String? = null
 
@@ -1171,13 +1483,21 @@ class OpenCodeService(private val project: Project) : Disposable {
             }
         }
 
+        if (isWindows()) {
+            val path = resolveWindowsCliFromPath()
+            if (path != null) {
+                logger.info("[OpenCode] Resolved Windows CLI from PATH: $path")
+                _cachedBinary = path
+                return path
+            }
+        }
+
         return "opencode"
     }
 
     /** Detect OpenCode binary path (Background thread safe) */
     private fun detectOpenCodeBinary(): String? {
         val home = System.getProperty("user.home")
-        val exe = if (isWindows()) ".exe" else ""
         
         // Check common installation paths (ordered by priority)
         val candidates = if (isWindows()) {
@@ -1207,6 +1527,13 @@ class OpenCodeService(private val project: Project) : Disposable {
             }
         }
 
+        if (isWindows()) {
+            val path = resolveWindowsCliFromPath() ?: return null
+            logger.info("[OpenCode] Detected Windows CLI in PATH: $path")
+            _cachedBinary = path
+            return path
+        }
+
         // Fallback: Check PATH (may fail in sandboxed environments like Snap)
         if (checkOpenCodeCliAvailable()) {
             logger.info("[OpenCode] CLI detected in PATH")
@@ -1215,6 +1542,15 @@ class OpenCodeService(private val project: Project) : Disposable {
         }
 
         return null
+    }
+
+    private fun resolveWindowsCliFromPath(): String? {
+        val output = runCatching {
+            CapturingProcessHandler(GeneralCommandLine(listOf("cmd", "/c", "where", "opencode")))
+                .runProcess(5000)
+        }.getOrNull() ?: return null
+        if (output.exitCode != 0) return null
+        return OpenCodeCliResolver.selectWindowsExecutable(output.stdout)
     }
 
     /** Check CLI availability (safe for background thread) */
@@ -1240,22 +1576,87 @@ class OpenCodeService(private val project: Project) : Disposable {
         }
     }
 
+    private fun showServerStartFailure(port: Int) {
+        sendNotification(
+            "OpenCode Server Not Started",
+            "Port $port is occupied or could not be verified. The plugin did not start or terminate another process.",
+            NotificationType.WARNING
+        )
+    }
+
     private fun isWindows() = System.getProperty("os.name", "").lowercase().contains("windows")
     private fun pinTerminalTab(f: VirtualFile) { try { FileEditorManagerEx.getInstanceEx(project).currentWindow?.setFilePinned(f, true) } catch (_: Exception) {} }
     private fun restartServer(m: ConnectionMode) {
         val h = hostname
         val p = port ?: return
         val pwd = password
+        val ownership = serverOwnership
+        val expectedSharedServer = sharedServerIdentity
+
+        if (ownership == ServerOwnership.SHARED) {
+            ServiceDiscovery.invalidateCache()
+            disconnectAndReset(terminateServer = false)
+            AppExecutorUtil.getAppExecutorService().submit {
+                val decision = ServerLifecyclePolicy.reviveAction(
+                    ownership,
+                    expectedSharedServer,
+                    ServiceDiscovery.discoverSharedServer()
+                )
+                when (decision) {
+                    is ReviveAction.ReattachSharedServer -> ApplicationManager.getApplication().invokeLater {
+                        if (project.isDisposed) return@invokeLater
+                        lastMode = m
+                        connectToExistingServer(
+                            decision.server.hostname,
+                            decision.server.port,
+                            ProcessAuthDetector.ServerAuth("opencode", decision.server.password),
+                            true,
+                            m == ConnectionMode.WEB,
+                            ownership = ServerOwnership.SHARED,
+                            sharedServer = decision.server
+                        )
+                    }
+                    is ReviveAction.Abort -> sendNotification(
+                        "Shared OpenCode Service Needs Attention",
+                        "Automatic restart was skipped: ${decision.reason}. Reconnect or verify the service manually.",
+                        NotificationType.WARNING
+                    )
+                    ReviveAction.StartOwnedServer -> Unit
+                }
+            }
+            return
+        }
+
+        if (ownership == ServerOwnership.ATTACHED) {
+            sendNotification(
+                "OpenCode Server Not Owned",
+                "The plugin will not restart a server it did not create. Reconnect or choose a server manually.",
+                NotificationType.WARNING
+            )
+            showConnectionDialog()
+            return
+        }
+
         val liveServerHandler = localServerProcess?.takeIf { it.process.isAlive }
+        val previousOwnedPort = ownedServerPort
         disconnectAndReset(terminateServer = false)
         localServerProcess = liveServerHandler
+        ownedServerPort = previousOwnedPort
+        serverOwnership = ownership
         hostname = h
         port = p
         password = pwd
         lastMode = m
         if (m == ConnectionMode.WEB) createWebTerminal(h, p, pwd)
         else if (m == ConnectionMode.REMOTE) {
-            connectToExistingServer(h, p, ProcessAuthDetector.ServerAuth("opencode", pwd), false, false)
+            connectToExistingServer(
+                h,
+                p,
+                ProcessAuthDetector.ServerAuth("opencode", pwd),
+                false,
+                false,
+                ownership = ServerOwnership.REMOTE
+            )
         } else createLocalTerminal(h, p, pwd)
     }
     private fun focusTerminalUI() { terminalVirtualFile?.let { FileEditorManager.getInstance(project).openFile(it, true) } ?: webVirtualFile?.let { FileEditorManager.getInstance(project).openFile(it, true) } }
@@ -1289,7 +1690,7 @@ class OpenCodeService(private val project: Project) : Disposable {
         val p = port ?: return
         val h = hostname
         AppExecutorUtil.getAppExecutorService().submit {
-            val running = PortFinder.isOpenCodeRunningOnPort(p, h, username, password)
+            val running = PortFinder.isOpenCodeRunningOnPort(p, h, username, password) is OpenCodeHealthResult.Healthy
             ApplicationManager.getApplication().invokeLater {
                 if (project.isDisposed) return@invokeLater
                 if (running) {

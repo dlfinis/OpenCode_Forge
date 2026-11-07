@@ -1,7 +1,7 @@
 package ai.opencode.ide.jetbrains.integration
 
 import ai.opencode.ide.jetbrains.util.PortFinder
-import org.junit.Assert.assertFalse
+import ai.opencode.ide.jetbrains.util.OpenCodeHealthResult
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -12,8 +12,11 @@ class PortFinderAuthTest {
         server.start()
 
         try {
-            assertTrue(PortFinder.isOpenCodeRunningOnPort(server.activePort))
-            assertTrue(PortFinder.isAuthRequiredOnPort(server.activePort))
+            assertTrue(PortFinder.isOpenCodeRunningOnPort(server.activePort) is OpenCodeHealthResult.AuthRequired)
+            assertTrue(
+                PortFinder.isOpenCodeRunningOnPort(server.activePort, username = "opencode", password = "port-finder-password") is
+                    OpenCodeHealthResult.Healthy
+            )
         } finally {
             server.stop()
         }
@@ -25,8 +28,7 @@ class PortFinderAuthTest {
         server.start()
 
         try {
-            assertTrue(PortFinder.isOpenCodeRunningOnPort(server.activePort))
-            assertFalse(PortFinder.isAuthRequiredOnPort(server.activePort))
+            assertTrue(PortFinder.isOpenCodeRunningOnPort(server.activePort) is OpenCodeHealthResult.Healthy)
         } finally {
             server.stop()
         }

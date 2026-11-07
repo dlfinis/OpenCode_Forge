@@ -1,9 +1,11 @@
-# OpenCode JetBrains Plugin
+# OpenCode UI v2 (community)
 
 [![JetBrains Plugin](https://img.shields.io/badge/JetBrains-Plugin-blue)](https://plugins.jetbrains.com)
 [![OpenCode](https://img.shields.io/badge/OpenCode-AI%20Agent-green)](https://opencode.ai)
 
 A JetBrains IDE plugin that integrates [OpenCode](https://opencode.ai) — the open-source AI coding agent — directly into your development workflow.
+
+> **Community fork of [OpenCode UI](https://github.com/LaiZhou/OpenCode_UI) by LaiZhou**, maintained to track the **OpenCode v2** server API after the original project stopped receiving updates. See [Credits and lineage](#credits-and-lineage).
 
 ## Features
 
@@ -156,6 +158,19 @@ Try closing the "OpenCode({port})" terminal tab and pressing `Cmd+Esc` or `Ctrl+
 - [OpenCode Documentation](https://opencode.ai/docs)
 - [GitHub Issues](https://github.com/anomalyco/opencode/issues)
 - [Discord Community](https://opencode.ai/discord)
+
+## Credits and lineage
+
+This project is a derivative work based on **[OpenCode UI](https://github.com/LaiZhou/OpenCode_UI)** by
+**LaiZhou**, licensed under the MIT License. The full commit history is preserved in this repository.
+
+- **LaiZhou** — original project: plugin architecture, terminal, diff viewer, notifications, documentation.
+- **Milos Zivkovic** — connection dialog base-path field and project-module selector.
+- **Michael Bauer** — README improvements.
+
+What this fork changes is recorded in [releaseNotes/](releaseNotes/). The headline difference is scope:
+the original targets the OpenCode v1 server API, which no longer matches the installed CLI, while this
+fork targets **v2 only** and reports a v1 server as unsupported instead of failing silently.
 
 ## License
 

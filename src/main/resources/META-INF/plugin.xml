@@ -1,14 +1,17 @@
 <!-- Plugin Configuration File: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
 <idea-plugin>
-  <id>ai.opencode.ide.jetbrains</id>
-  <name>OpenCode UI</name>
-  <vendor email="hhlai1990@gmail.com" url="https://github.com/LaiZhou/OpenCode_UI">laizhou</vendor>
+  <id>io.github.dlfinis.opencode.ui</id>
+  <name>OpenCode UI v2 (community)</name>
+  <vendor url="https://github.com/dlfinis/OpenCode_UI">dlfinis</vendor>
   
 
   <description><![CDATA[
     <b>OpenCode UI - AI Coding Agent for JetBrains IDEs</b><br><br>
     
     Seamlessly integrates <a href="https://opencode.ai">OpenCode</a> directly into your workflow.<br><br>
+
+    <b>Community fork of <a href="https://github.com/LaiZhou/OpenCode_UI">OpenCode UI</a> by LaiZhou.</b>
+    It targets the <b>OpenCode v2</b> server API only: a v1 server is detected and reported as unsupported.<br><br>
     
     <b>Key Features:</b><br>
     <ul>

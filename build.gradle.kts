@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "ai.opencode"
-version = "1.2.0"
+version = "1.2.1"
 
 repositories {
     mavenCentral()
@@ -45,6 +45,12 @@ intellijPlatform {
         }
 
         changeNotes = """
+            <h2>1.2.1</h2>
+            <ul>
+                <li>Improved: The plugin archive no longer bundles kotlin-stdlib and uses the IDE's copy, shrinking the download from 3.2 MB to 1.9 MB.</li>
+                <li>Improved: Build toolchain refreshed (Gradle 9.9.0, IntelliJ Platform Gradle Plugin 2.20.0, Kotlin 2.2.20, OkHttp 5.5.1, Gson 2.14.0).</li>
+                <li>Improved: Removed the unused okhttp-sse dependency.</li>
+            </ul>
             <h2>1.2.0</h2>
             <ul>
                 <li>New: Typed server health check — a non-OpenCode service on the same port is no longer mistaken for a live server, and auth failures no longer trigger automatic restarts.</li>

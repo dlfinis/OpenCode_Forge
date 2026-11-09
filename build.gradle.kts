@@ -17,9 +17,13 @@ repositories {
 }
 
 // Read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin.html
+// Override with -PplatformVersion=<version> to build and test against another IDE.
+// The default is the compatibility floor declared by sinceBuild = 252.
+val platformVersion = providers.gradleProperty("platformVersion").orElse("2025.2.4")
+
 dependencies {
     intellijPlatform {
-        intellijIdea("2025.2.4")
+        intellijIdea(platformVersion.get())
         testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
 
         // Terminal API
@@ -88,8 +92,20 @@ intellijPlatform {
     }
 
     pluginVerification {
+        // Static compatibility check of the built plugin against each IDE's API surface.
+        //
+        // Every entry downloads a full IDE distribution, so the cross-version matrix is opt-in:
+        // a local `verifyPlugin` only checks the platform already resolved by the build, while CI
+        // runs the whole range with -PverifyAllIdes.
+        //
+        // IntelliJ IDEA Community stops at 2025.3; from 2026.1 JetBrains ships a single unified
+        // distribution, so the newer targets are IIU.
         ides {
-            create("IC", "2025.2.4")
+            create("IU", platformVersion.get())
+            if (providers.gradleProperty("verifyAllIdes").isPresent) {
+                create("IC", "2025.3")
+                create("IU", "2026.3")
+            }
         }
     }
 }

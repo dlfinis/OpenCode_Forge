@@ -2,7 +2,7 @@
 <idea-plugin>
   <id>io.github.dlfinis.opencode.forge</id>
   <name>OpenCode Forge</name>
-  <vendor url="https://github.com/dlfinis/OpenCode_Forge">dlfinis</vendor>
+  <vendor url="https://github.com/dlfinis/OpenCode_Forge" email="develop@auropia.cc.cd">Auropia</vendor>
   
 
   <description><![CDATA[

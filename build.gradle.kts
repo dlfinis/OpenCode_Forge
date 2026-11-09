@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "ai.opencode"
-version = "1.2.1"
+version = "1.2.2"
 
 repositories {
     mavenCentral()
@@ -55,6 +55,11 @@ intellijPlatform {
         }
 
         changeNotes = """
+            <h2>1.2.2</h2>
+            <ul>
+                <li>Changed: The plugin is now licensed under GPL-3.0. The MIT notice of the original OpenCode UI project is preserved in NOTICE.</li>
+                <li>Improved: The terminal no longer depends on an IntelliJ API that is scheduled for removal.</li>
+            </ul>
             <h2>1.2.1</h2>
             <ul>
                 <li>Improved: The plugin archive no longer bundles kotlin-stdlib and uses the IDE's copy, shrinking the download from 3.2 MB to 1.9 MB.</li>
@@ -120,6 +125,14 @@ val openCodeCliOnPath = System.getenv("PATH").orEmpty()
     .any { File(it, "opencode").canExecute() }
 
 tasks {
+    // GPL-3.0 requires the licence to travel with the binary, and the NOTICE carries the MIT
+    // notice of the original project this work derives from. Neither belongs in the repository
+    // twice, so they are pulled into the archive at build time.
+    processResources {
+        from("LICENSE") { into("META-INF") }
+        from("NOTICE") { into("META-INF") }
+    }
+
     // The IntelliJ Platform Gradle Plugin applies the platform JDK toolchain (21 for 2025.2+),
     // and that toolchain drives both the Java and the Kotlin target. Do not override one side
     // alone: a mismatched jvmTarget fails the build, and a lower target than the platform's

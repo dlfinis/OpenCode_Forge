@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "ai.opencode"
-version = "1.2.2"
+version = "1.2.3"
 
 repositories {
     mavenCentral()
@@ -55,6 +55,11 @@ intellijPlatform {
         }
 
         changeNotes = """
+            <h2>1.2.3</h2>
+            <ul>
+                <li>Fix: Opening the OpenCode terminal no longer leaves an empty tab in the Terminal tool window or steals focus to it.</li>
+                <li>Improved: A file that cannot be read while capturing a diff is no longer logged as a warning; the recovery path is expected.</li>
+            </ul>
             <h2>1.2.2</h2>
             <ul>
                 <li>Changed: The plugin is now licensed under GPL-3.0. The MIT notice of the original OpenCode UI project is preserved in NOTICE.</li>

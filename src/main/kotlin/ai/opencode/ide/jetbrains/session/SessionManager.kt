@@ -154,7 +154,7 @@ open class SessionManager(private val project: Project) : Disposable {
                         capturedBeforeContent.putIfAbsent(relativePath, content)
                         logger.info("[Turn #$turnNumber] Captured via java.io.File for: $relativePath")
                     } else {
-                        logger.warn("[Turn #$turnNumber] File not found on disk: $relativePath. Trying LocalHistory...")
+                        logger.debug("[Turn #$turnNumber] File not found on disk: $relativePath. Trying LocalHistory...")
                         // Fallback to LocalHistory (Last known state provided by IDE)
                         // This handles external deletions where VFS event comes after physical deletion.
                         val bytes = LocalHistory.getInstance().getByteContent(file) { true }
@@ -163,7 +163,7 @@ open class SessionManager(private val project: Project) : Disposable {
                             capturedBeforeContent.putIfAbsent(relativePath, content)
                             logger.info("[Turn #$turnNumber] Captured via LocalHistory (Latest) for: $relativePath")
                         } else {
-                            logger.warn("[Turn #$turnNumber] LocalHistory lookup returned null or empty for $relativePath")
+                            logger.debug("[Turn #$turnNumber] LocalHistory lookup returned null or empty for $relativePath")
                         }
                     }
                 } catch (ioe: Exception) {

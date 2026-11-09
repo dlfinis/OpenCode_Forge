@@ -50,7 +50,8 @@ import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.ui.SystemNotifications
 import com.intellij.util.concurrency.AppExecutorUtil
 
-import org.jetbrains.plugins.terminal.TerminalView
+import org.jetbrains.plugins.terminal.ShellTerminalWidget
+import org.jetbrains.plugins.terminal.TerminalToolWindowManager
 import org.jetbrains.plugins.terminal.TerminalProjectOptionsProvider
 
 import java.nio.charset.StandardCharsets
@@ -1464,7 +1465,12 @@ class OpenCodeService(private val project: Project) : Disposable {
         }
         val t = "$OPEN_CODE_TAB_PREFIX($p)"
         val wd = customBasePath ?: project.basePath
-        val w = TerminalView.getInstance(project).createLocalShellWidget(wd, t)
+        // TerminalView is @ApiStatus.ScheduledForRemoval. The manager it delegates to is not
+        // deprecated in this platform, and this cast is exactly what TerminalView did internally,
+        // so the behaviour is identical without depending on an API scheduled for removal.
+        val w = ShellTerminalWidget.toShellJediTermWidgetOrThrow(
+            TerminalToolWindowManager.getInstance(project).createShellWidget(wd, t, true, true)
+        )
         OpenCodeTerminalLinkFilter.install(project, w)
         val f = OpenCodeTerminalVirtualFile(t)
         terminalVirtualFile = f; OpenCodeTerminalFileEditorProvider.registerWidget(f, w)

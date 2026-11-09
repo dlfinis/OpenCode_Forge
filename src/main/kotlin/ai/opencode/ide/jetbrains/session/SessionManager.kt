@@ -131,11 +131,36 @@ open class SessionManager(private val project: Project) : Disposable {
         // fileCopied is rare for AI and caused compilation issues
     }
 
+    private val TRACKED_PATH_EXCLUSIONS = listOf(
+        ".git",
+        ".idea",
+        ".gradle",
+        ".intellijPlatform",
+        ".kotlin",
+        "build",
+        "out",
+        "node_modules"
+    )
+
+    /**
+     * Build output, IDE internals and dependency caches change constantly while the IDE works.
+     * Tracking them costs memory and floods the diff pipeline with files the user never edited.
+     * The case that surfaced this: a runIde sandbox living inside the project it opened, which made
+     * the IDE's own indexes look like source changes.
+     */
+    internal fun isTrackablePath(relativePath: String): Boolean {
+        val normalized = relativePath.replace('\\', '/').trimStart('/')
+        return TRACKED_PATH_EXCLUSIONS.none { excluded ->
+            normalized == excluded || normalized.startsWith("$excluded/")
+        }
+    }
+
     internal fun captureContentBeforeChange(file: VirtualFile?) {
         if (file == null || !file.isValid || file.isDirectory) return
         
         val relativePath = PathUtil.relativizeToProject(project, file.path)
-        
+        if (!isTrackablePath(relativePath)) return
+
         // Only capture if NOT already captured for this turn/gap cycle.
         // We want the ORIGINAL state before the first modification in this cycle.
         if (!capturedBeforeContent.containsKey(relativePath)) {
@@ -176,6 +201,7 @@ open class SessionManager(private val project: Project) : Disposable {
     private fun onVfsChange(file: VirtualFile?) {
         if (file == null) return
         val relativePath = PathUtil.relativizeToProject(project, file.path)
+        if (!isTrackablePath(relativePath)) return
         // Always record change to the current set (which represents the 'active' or 'just finished' turn)
         // This captures late events that arrive after Turn End but before Next Turn Start.
         if (vfsChangedFiles.add(relativePath)) {

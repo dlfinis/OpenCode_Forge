@@ -98,12 +98,12 @@ intellijPlatform {
         // a local `verifyPlugin` only checks the platform already resolved by the build, while CI
         // runs the whole range with -PverifyAllIdes.
         //
-        // IntelliJ IDEA Community stops at 2025.3; from 2026.1 JetBrains ships a single unified
-        // distribution, so the newer targets are IIU.
+        // IntelliJ IDEA Community (IC) is no longer published from 2025.3 onwards: JetBrains
+        // ships a single unified distribution, so every target here is IU.
         ides {
             create("IU", platformVersion.get())
             if (providers.gradleProperty("verifyAllIdes").isPresent) {
-                create("IC", "2025.3")
+                create("IU", "2025.3")
                 create("IU", "2026.3")
             }
         }

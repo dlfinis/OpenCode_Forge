@@ -8,10 +8,9 @@ odd/
 .kotlin
 
 ### IntelliJ IDEA ###
-.idea/modules.xml
-.idea/jarRepositories.xml
-.idea/compiler.xml
-.idea/libraries/
+# Local IDE configuration. Nothing here is shared with the build, and
+# workspace.xml changes on every IDE session.
+.idea/
 *.iws
 *.iml
 *.ipr

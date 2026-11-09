@@ -1468,9 +1468,23 @@ class OpenCodeService(private val project: Project) : Disposable {
         // TerminalView is @ApiStatus.ScheduledForRemoval. The manager it delegates to is not
         // deprecated in this platform, and this cast is exactly what TerminalView did internally,
         // so the behaviour is identical without depending on an API scheduled for removal.
-        val w = ShellTerminalWidget.toShellJediTermWidgetOrThrow(
-            TerminalToolWindowManager.getInstance(project).createShellWidget(wd, t, true, true)
-        )
+        val terminalManager = TerminalToolWindowManager.getInstance(project)
+        val createdWidget = terminalManager.createShellWidget(wd, t, true, true)
+        val w = ShellTerminalWidget.toShellJediTermWidgetOrThrow(createdWidget)
+        // createShellWidget registers a Content in the Terminal tool window and activates it. This
+        // plugin hosts the widget in its own editor tab, so that Content would remain behind as an
+        // empty tab. Remove it WITHOUT disposing: disposing would destroy the widget we are about
+        // to reuse.
+        terminalManager.toolWindow?.let { terminalToolWindow ->
+            val contentManager = terminalToolWindow.contentManager
+            contentManager.contents
+                .firstOrNull { TerminalToolWindowManager.findWidgetByContent(it) === createdWidget }
+                ?.let { contentManager.removeContent(it, false) }
+            // createShellWidget also activated the tool window. If our content was the only one,
+            // it is now an empty window the user never asked for, so close it. A window that still
+            // holds the user's own terminals is left alone.
+            if (contentManager.contents.isEmpty()) terminalToolWindow.hide()
+        }
         OpenCodeTerminalLinkFilter.install(project, w)
         val f = OpenCodeTerminalVirtualFile(t)
         terminalVirtualFile = f; OpenCodeTerminalFileEditorProvider.registerWidget(f, w)

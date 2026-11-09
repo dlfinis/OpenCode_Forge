@@ -3,9 +3,13 @@
 [![JetBrains Plugin](https://img.shields.io/badge/JetBrains-Plugin-blue)](https://plugins.jetbrains.com)
 [![OpenCode](https://img.shields.io/badge/OpenCode-AI%20Agent-green)](https://opencode.ai)
 
-A JetBrains IDE plugin that integrates [OpenCode](https://opencode.ai) — the open-source AI coding agent — directly into your development workflow.
+**OpenCode Forge** puts the [OpenCode](https://opencode.ai) AI coding agent natively inside your
+JetBrains IDE: connect to an OpenCode v2 server and drive an autonomous coding agent without leaving
+the IDE you already live in.
 
-> **Community fork of [OpenCode UI](https://github.com/LaiZhou/OpenCode_UI) by LaiZhou**, maintained to track the **OpenCode v2** server API after the original project stopped receiving updates. See [Credits and lineage](#credits-and-lineage).
+> **Community fork of [OpenCode UI](https://github.com/LaiZhou/OpenCode_UI) by LaiZhou**, rebuilt as
+> the answer to the **OpenCode v2** move: full v2 compatibility and functionality after the original
+> project stopped receiving updates and stayed on the v1 API. See [Credits and lineage](#credits-and-lineage).
 
 ## Features
 
@@ -174,9 +178,16 @@ This project is a derivative work based on **[OpenCode UI](https://github.com/La
 - **Milos Zivkovic** — connection dialog base-path field and project-module selector.
 - **Michael Bauer** — README improvements.
 
-What this fork changes is recorded in [releaseNotes/](releaseNotes/). The headline difference is scope:
-the original targets the OpenCode v1 server API, which no longer matches the installed CLI, while this
-fork targets **v2 only** and reports a v1 server as unsupported instead of failing silently.
+What this fork changes is recorded in [releaseNotes/](releaseNotes/). OpenCode Forge was forked from
+the original as an improvement — **v2 compatibility and functionality end to end**. The original
+targets the OpenCode v1 server API, which no longer matches the installed CLI; this fork ships typed
+`/api/...` clients and patch-based diffs rebuilt for v2, https and remote connections, session resume,
+shared-service discovery, and a v1 server detected and reported as unsupported instead of failing
+silently.
+
+The work continues: planned improvements include connection recovery on reconnect, more robust diff
+review across working directories, and checkout-aware diff attribution. Track them in
+[releaseNotes/](releaseNotes/) and the [issue tracker](https://github.com/dlfinis/OpenCode_Forge/issues).
 
 ## License
 

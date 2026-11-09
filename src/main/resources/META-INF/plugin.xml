@@ -3,22 +3,37 @@
   <id>io.github.dlfinis.opencode.forge</id>
   <name>OpenCode Forge</name>
   <vendor url="https://github.com/dlfinis/OpenCode_Forge" email="develop@auropia.cc.cd">Auropia</vendor>
-  
+
 
   <description><![CDATA[
-    <b>OpenCode Forge - AI Coding Agent for JetBrains IDEs</b><br><br>
-    
-    Seamlessly integrates <a href="https://opencode.ai">OpenCode</a> directly into your workflow.<br><br>
+    <b>OpenCode Forge — the OpenCode AI coding agent, native to your JetBrains IDE.</b><br><br>
 
-    <b>Community fork of <a href="https://github.com/LaiZhou/OpenCode_UI">OpenCode UI</a> by LaiZhou.</b>
-    It targets the <b>OpenCode v2</b> server API only: a v1 server is detected and reported as unsupported.<br><br>
-    
-    <b>Key Features:</b><br>
-    <ul>
-        <li><b>Quick Launch:</b> Connect to existing OpenCode server (e.g., OpenCode Desktop) or create new terminal with <code>Cmd+Esc</code> / <code>Ctrl+\</code>. Supports automatic authentication and optional password input.</li>
-        <li><b>Context Sharing:</b> Send current file, selection, or Project View items to the agent with <code>Opt+Cmd+K</code> / <code>Ctrl+Alt+K</code>.</li>
-        <li><b>Native Diff Review:</b> Review AI-generated changes in a multi-file diff viewer. Accept stages changes (<code>git add</code>), Reject restores original content. Automatic snapshots ensure you can always recover previous versions.</li>
-    </ul>
+    No context switching, no copy-paste: connect to an OpenCode v2 server and drive
+    an autonomous coding agent without leaving the IDE you already live in.<br><br>
+
+    <b>⚡ Quick Launch</b><br>
+    Press <code>Cmd+Esc</code> / <code>Ctrl+\</code> to launch an agent session in an integrated
+    terminal — or attach to a running OpenCode Desktop server with automatic
+    authentication. Connect first, code second.<br><br>
+
+    <b>🧠 Context Sharing</b><br>
+    Send the current file, your selection, or Project View items straight to the agent
+    with <code>Opt+Cmd+K</code> / <code>Ctrl+Alt+K</code>. The agent sees exactly what you see —
+    no re-explaining your codebase to a chat window.<br><br>
+
+    <b>🔍 Native Diff Review</b><br>
+    Every proposed change lands in a multi-file diff viewer. Accept stages it
+    (<code>git add</code>), Reject restores the original content — and automatic snapshots
+    guarantee you can always recover a previous version. Nothing touches your
+    working tree unreviewed.<br><br>
+
+    <b>🛡 OpenCode v2 native</b><br>
+    Community fork of <a href="https://github.com/LaiZhou/OpenCode_UI">OpenCode UI</a> by LaiZhou,
+    rebuilt against the OpenCode v2 server API. A v1 server is detected and reported
+    as unsupported — no half-broken compatibility modes.<br><br>
+
+    Compatible with IntelliJ IDEA, PyCharm, WebStorm, GoLand, Rider and other
+    IntelliJ-based IDEs.
   ]]></description>
 
   <depends>com.intellij.modules.platform</depends>

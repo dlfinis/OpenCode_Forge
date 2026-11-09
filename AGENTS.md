@@ -6,15 +6,17 @@ This document provides strict guidelines and useful context for AI agents (and h
 ## 1. Project Overview
 
 - **Type**: IntelliJ Platform Plugin
-- **Language**: Kotlin (JDK 17)
+- **Language**: Kotlin (JDK 21; the platform toolchain drives the target)
 - **Build System**: Gradle (Kotlin DSL)
 - **Target Platform**: IntelliJ IDEA 2025.2+ (Since Build 252)
-- **Version**: 1.0.4+ (See `build.gradle.kts`)
+- **Version**: 1.2.1 (See `build.gradle.kts`)
 
 ### Core Dependencies
-- **IntelliJ Platform SDK**: 2025.2.4
-- **OkHttp**: 4.12.0 (Networking, SSE)
-- **Gson**: 2.11.0 (JSON Serialization)
+- **IntelliJ Platform SDK**: 2025.2.4 (`sinceBuild` 252)
+- **IntelliJ Platform Gradle Plugin**: 2.20.0
+- **Kotlin**: 2.2.20 — must match the stdlib the target platform ships, because the plugin does not bundle one
+- **OkHttp**: 5.5.1 (Networking; `okhttp-sse` is not used, the SSE listener reads the response body)
+- **Gson**: 2.14.0 (JSON Serialization)
 
 ## 2. Build and Verification Commands
 
@@ -115,18 +117,33 @@ src/main/kotlin/ai/opencode/ide/jetbrains/
 │   ├── OpenCodeTerminalVirtualFile.kt
 │   ├── OpenCodeTerminalFileEditor.kt
 │   └── OpenCodeTerminalLinkFilter.kt # Hyperlinks in terminal (@file:line)
+├── actions/                    # ACTIONS: Tools-menu entries
+│   ├── StopOpenCodeServerAction.kt
+│   └── OpenPreviousSessionAction.kt
 ├── ui/                         # UI: Dialogs & Popups
 │   └── OpenCodeConnectDialog.kt
+├── web/                        # JCEF web tab (optional config file)
 └── util/                       # UTILS: Helpers
-    ├── PortFinder.kt           # Localhost port management
-    └── ProcessAuthDetector.kt  # Auth token discovery
+    ├── PortFinder.kt           # Localhost port management, typed health probe
+    ├── OpenCodeHealth.kt       # /api/info classification
+    ├── ServiceDiscovery.kt     # v2 shared-service registration
+    ├── DiscoveryResultCache.kt # TTL + single-flight discovery cache
+    ├── ServerLifecyclePolicy.kt# OWNED/SHARED/ATTACHED/REMOTE decisions
+    ├── LocalServerSpawnCoordinator.kt # Per-port spawn serialization
+    ├── OpenCodeCliResolver.kt  # Binary resolution, Windows shims
+    ├── OpenCodeTerminalCommand.kt # Shell-aware launch command
+    ├── OpenCodeVersionGate.kt  # v2 major-version warning
+    ├── OpenCodeLegacyProbe.kt  # Detects a v1 server to report it as unsupported
+    └── ProcessAuthDetector.kt  # Auth data holder (no process scanning)
 ```
 
 ### Key Architectural Concepts
 1.  **OpenCodeService**: The central hub. It owns the `ApiClient` and orchestrates the connection.
 2.  **SessionManager**: Manages the "business logic" of the active coding session, including Git operations and file tracking.
 3.  **Terminal Integration**: We don't just spawn a shell; we wrap it in a custom `FileEditor` to provide a "Tab" experience (similar to opening a file).
-4.  **Diff Strategy**: We use local Git operations (`git add` for accept, custom restore for reject) rather than relying solely on server-side reverts.
+4.  **Diff Strategy**: We use local Git operations (`git add` for accept, custom restore for reject) rather than relying solely on server-side reverts. Accept treats a gitignored path as accepted-without-staging, because `git add` refuses it and the change is already on disk.
+5.  **Server Ownership**: every lifecycle decision (stop, restart, revive) depends on `ServerOwnership`. The plugin only terminates a server it started; a shared v2 service is disconnected, never killed.
+6.  **OpenCode v2 only**: all calls go through `/api/...`. A v1 server is detected and reported, not supported.
 
 ## 5. Development Workflow for Agents
 

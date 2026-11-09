@@ -66,6 +66,45 @@ class OpenCodeServiceCommandTest {
         assertFalse(command.contains("--server"))
     }
 
+    @Test
+    fun resumesASpecificSessionInsteadOfTheLastOne() {
+        assumeFalse(System.getProperty("os.name", "").lowercase().contains("windows"))
+
+        val command = newService().buildOpenCodeCommand(
+            command = "/usr/local/bin/opencode",
+            h = "127.0.0.1",
+            p = 4096,
+            pwd = null,
+            cont = true,
+            sessionId = "ses_abc123"
+        )
+
+        assertEquals(
+            "'/usr/local/bin/opencode' --server 'http://127.0.0.1:4096' --session 'ses_abc123'",
+            command
+        )
+        assertFalse(command.contains("--continue"))
+    }
+
+    @Test
+    fun buildsAnHttpsServerUrlWhenTheConnectionUsesTls() {
+        assumeFalse(System.getProperty("os.name", "").lowercase().contains("windows"))
+
+        val command = newService().buildOpenCodeCommand(
+            command = "/usr/local/bin/opencode",
+            h = "opencode.example.test",
+            p = 443,
+            pwd = null,
+            cont = false,
+            scheme = "https"
+        )
+
+        assertEquals(
+            "'/usr/local/bin/opencode' --server 'https://opencode.example.test:443'",
+            command
+        )
+    }
+
     private fun newService(): OpenCodeService {
         val project = Proxy.newProxyInstance(
             Project::class.java.classLoader,

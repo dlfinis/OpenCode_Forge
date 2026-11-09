@@ -88,6 +88,8 @@ class OpenCodeService(private val project: Project) : Disposable {
     }
 
     private var hostname: String = "127.0.0.1"
+    /** URL scheme used for every request to the connected server; "https" for a TLS endpoint. */
+    private var scheme: String = "http"
     private var port: Int? = null
     private var username: String? = null
     private var password: String? = null
@@ -200,6 +202,68 @@ class OpenCodeService(private val project: Project) : Disposable {
                             )
                         }
                     }
+                )
+            }
+        }
+    }
+
+    /**
+     * Lets the user pick one of this project's existing sessions and resumes it in a terminal.
+     *
+     * The session list is fetched on a background thread and the picker is shown on the EDT, so a
+     * slow or unreachable server never freezes the UI. The v2 CLI resumes through `--session <id>`.
+     */
+    fun openPreviousSession() {
+        val client = apiClient
+        val activePort = port
+        val activeHost = hostname
+        val basePath = project.basePath
+        if (client == null || activePort == null || basePath == null) {
+            showConnectionDialog()
+            return
+        }
+
+        AppExecutorUtil.getAppExecutorService().submit {
+            val sessions: List<Session> = try {
+                client.getSessions(basePath)
+            } catch (e: Exception) {
+                logger.warn("[OpenCode] Could not list sessions", e)
+                emptyList()
+            }
+
+            ApplicationManager.getApplication().invokeLater {
+                if (project.isDisposed || port != activePort || hostname != activeHost) return@invokeLater
+                if (sessions.isEmpty()) {
+                    Messages.showInfoMessage(
+                        project,
+                        "No previous sessions were found for this project.",
+                        "OpenCode Sessions"
+                    )
+                    return@invokeLater
+                }
+
+                val ordered = sessions.sortedByDescending { it.time.updated }
+                val labels = ordered.map { it.title?.takeIf { title -> title.isNotBlank() } ?: it.id }
+                // The platform declares both a String[] and an Object[] overload; `as? String`
+                // keeps the result typed regardless of which one Kotlin resolves.
+                val chosen = Messages.showChooseDialog(
+                    project,
+                    "Select a session to resume:",
+                    "OpenCode Sessions",
+                    null,
+                    labels.toTypedArray(),
+                    labels.first()
+                ) as? String ?: return@invokeLater
+
+                val index = labels.indexOf(chosen)
+                if (index < 0) return@invokeLater
+                createTerminalUIInternal(
+                    activeHost,
+                    activePort,
+                    password,
+                    cont = false,
+                    customBasePath = null,
+                    sessionId = ordered[index].id
                 )
             }
         }
@@ -505,7 +569,7 @@ class OpenCodeService(private val project: Project) : Disposable {
 
     private fun initializeApiClient(host: String, port: Int) {
         val apiHost = if (host == "0.0.0.0") "127.0.0.1" else host
-        apiClient = OpenCodeApiClient(apiHost, port, username, password)
+        apiClient = OpenCodeApiClient(apiHost, port, username, password, scheme)
     }
 
     private fun startConnectionManager() {
@@ -781,7 +845,7 @@ class OpenCodeService(private val project: Project) : Disposable {
         activeSessionIds.clear(); turnIdleHandled.clear(); turnBarrierTasks.values.forEach { it.cancel(false) }; turnBarrierTasks.clear()
         if (terminateServer) terminateProcess() else detachLocalServerProcess()
         terminalVirtualFile?.let { OpenCodeTerminalFileEditorProvider.disposeWidget(it, null) }
-        terminalVirtualFile = null; terminalEditor = null; terminalEndpoint = null; webVirtualFile = null; port = null; hostname = "127.0.0.1"; apiClient = null
+        terminalVirtualFile = null; terminalEditor = null; terminalEndpoint = null; webVirtualFile = null; port = null; hostname = "127.0.0.1"; scheme = "http"; apiClient = null
         if (serverOwnership != ServerOwnership.OWNED || localServerProcess?.process?.isAlive != true) {
             serverOwnership = ServerOwnership.ATTACHED
             sharedServerIdentity = null
@@ -825,7 +889,14 @@ class OpenCodeService(private val project: Project) : Disposable {
             val suggestedAddress = resolveSuggestedAddress()
             ApplicationManager.getApplication().invokeLater {
                 OpenCodeConnectDialog.show(project, suggestedAddress)?.let {
-                    processConnectionChoice(it.hostname, it.port, it.password, it.useWebInterface, it.customBasePath) 
+                    processConnectionChoice(
+                        it.hostname,
+                        it.port,
+                        it.password,
+                        it.useWebInterface,
+                        it.customBasePath,
+                        it.scheme
+                    )
                 }
             }
         }
@@ -855,8 +926,10 @@ class OpenCodeService(private val project: Project) : Disposable {
         pwd: String?,
         web: Boolean,
         customBasePath: String? = null,
+        scheme: String = "http",
         allowCredentialPrompt: Boolean = true
     ) {
+        this.scheme = scheme
         val safeH = h.trim().ifBlank { "127.0.0.1" }
         val local = safeH in LOCAL_HOSTS
 
@@ -887,9 +960,12 @@ class OpenCodeService(private val project: Project) : Disposable {
                         safeH,
                         p,
                         auth,
-                        web,
-                        web,
-                        customBasePath,
+                        // A remote server used to connect headless, which reported "Connected to
+                        // host:port" and left the user with no way to interact. The terminal TUI
+                        // attaches to the remote endpoint through `--server`, so open it.
+                        ui = true,
+                        web = web,
+                        customBasePath = customBasePath,
                         ownership = ServerOwnership.REMOTE
                     )
                     return@invokeLater
@@ -997,6 +1073,7 @@ class OpenCodeService(private val project: Project) : Disposable {
             connection.password,
             web,
             connection.customBasePath ?: customBasePath,
+            scheme = connection.scheme,
             allowCredentialPrompt = false
         )
     }
@@ -1118,7 +1195,7 @@ class OpenCodeService(private val project: Project) : Disposable {
 
     private fun createWebUI(h: String, p: Int) {
         val connectHost = if (h == "0.0.0.0") "127.0.0.1" else h
-        webVirtualFile = WebModeSupport.openWebTab(project, connectHost, p, password) {}
+        webVirtualFile = WebModeSupport.openWebTab(project, connectHost, p, password, scheme) {}
     }
 
     private fun ensureLocalServer(binary: String, host: String, port: Int, serverPassword: String?): Boolean {
@@ -1360,7 +1437,14 @@ class OpenCodeService(private val project: Project) : Disposable {
         }
     }
 
-    private fun createTerminalUIInternal(h: String, p: Int, pwd: String?, cont: Boolean = true, customBasePath: String? = null) {
+    private fun createTerminalUIInternal(
+        h: String,
+        p: Int,
+        pwd: String?,
+        cont: Boolean = true,
+        customBasePath: String? = null,
+        sessionId: String? = null
+    ) {
         val endpointHost = if (h == "0.0.0.0") "127.0.0.1" else h
         val target = "$endpointHost:$p"
         val existing = terminalVirtualFile
@@ -1402,7 +1486,8 @@ class OpenCodeService(private val project: Project) : Disposable {
                             pwd,
                             cont,
                             usesServiceDiscoveryAuth,
-                            shellPath
+                            shellPath,
+                            sessionId
                         )
                     )
                     pinTerminalTab(f)
@@ -1417,8 +1502,10 @@ class OpenCodeService(private val project: Project) : Disposable {
         p: Int,
         pwd: String?,
         cont: Boolean,
-        useServiceDiscoveryAuth: Boolean = false
-    ): String = buildOpenCodeCommandForShell(command, h, p, pwd, cont, useServiceDiscoveryAuth, null)
+        useServiceDiscoveryAuth: Boolean = false,
+        sessionId: String? = null,
+        scheme: String = this.scheme
+    ): String = buildOpenCodeCommandForShell(command, h, p, pwd, cont, useServiceDiscoveryAuth, null, sessionId, scheme)
 
     internal fun buildOpenCodeCommandForShell(
         command: String,
@@ -1427,7 +1514,9 @@ class OpenCodeService(private val project: Project) : Disposable {
         pwd: String?,
         cont: Boolean,
         useServiceDiscoveryAuth: Boolean,
-        shellPath: String?
+        shellPath: String?,
+        sessionId: String? = null,
+        scheme: String = this.scheme
     ): String {
         if (isWindows()) {
             return OpenCodeTerminalCommand.buildWindowsCommand(
@@ -1437,21 +1526,28 @@ class OpenCodeService(private val project: Project) : Disposable {
                 password = pwd,
                 continueSession = cont,
                 useServiceDiscoveryAuth = useServiceDiscoveryAuth,
-                shell = OpenCodeTerminalCommand.detectShell(shellPath, windows = true)
+                shell = OpenCodeTerminalCommand.detectShell(shellPath, windows = true),
+                scheme = scheme,
+                sessionId = sessionId
             )
         }
 
         val cmdSafe = shellQuote(command)
+        val sessionSuffix = when {
+            sessionId != null -> " --session ${shellQuote(sessionId)}"
+            cont -> " --continue"
+            else -> ""
+        }
         if (useServiceDiscoveryAuth) {
             // Attached to the v2 shared background service: the CLI discovers the
             // service and its credentials from its own state file, so neither the
             // URL nor a password needs to appear in the terminal.
-            return if (cont) "$cmdSafe --continue" else cmdSafe
+            return cmdSafe + sessionSuffix
         }
         val connectHost = if (h == "0.0.0.0") "127.0.0.1" else h
-        val serverUrl = "http://$connectHost:$p"
+        val serverUrl = "$scheme://$connectHost:$p"
         val serverUrlSafe = shellQuote(serverUrl)
-        val base = "$cmdSafe --server $serverUrlSafe${if (cont) " --continue" else ""}"
+        val base = "$cmdSafe --server $serverUrlSafe$sessionSuffix"
         if (pwd.isNullOrBlank()) return base
         val shellPassword = pwd.replace("'", "'\\''")
         return "OPENCODE_PASSWORD='$shellPassword' OPENCODE_SERVER_PASSWORD='$shellPassword' $base"

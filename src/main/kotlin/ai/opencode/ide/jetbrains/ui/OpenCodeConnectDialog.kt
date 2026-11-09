@@ -18,11 +18,14 @@ import java.util.Base64
 import javax.swing.JComponent
 import javax.swing.JPanel
 
-internal data class ServerAddress(val hostname: String, val port: Int) {
+internal data class ServerAddress(val hostname: String, val port: Int, val scheme: String = "http") {
     val isLocal: Boolean
         get() = hostname in LOCAL_HOSTS
 
-    fun asAddress(): String = "$hostname:$port"
+    val isSecure: Boolean
+        get() = scheme == "https"
+
+    fun asAddress(): String = if (isSecure) "https://$hostname:$port" else "$hostname:$port"
 
     private companion object {
         val LOCAL_HOSTS = setOf("127.0.0.1", "localhost", "0.0.0.0")
@@ -58,7 +61,8 @@ class OpenCodeConnectDialog(
         val port: Int,
         val password: String?,
         val useWebInterface: Boolean,
-        val customBasePath: String? = null
+        val customBasePath: String? = null,
+        val scheme: String = "http"
     )
 
     private val addressField = JBTextField(initialAddress.asAddress())
@@ -70,6 +74,8 @@ class OpenCodeConnectDialog(
     var hostname: String = initialAddress.hostname
         private set
     var port: Int = initialAddress.port
+        private set
+    var scheme: String = initialAddress.scheme
         private set
     var password: String? = null
         private set
@@ -122,7 +128,7 @@ class OpenCodeConnectDialog(
             basePathField.selectedIndex = -1
         }
 
-        addressField.toolTipText = "Format: hostname:port (e.g., 127.0.0.1:4096)"
+        addressField.toolTipText = "Format: hostname:port (e.g., 127.0.0.1:4096). Use https://host:port for TLS."
         passwordField.toolTipText = "OPENCODE_SERVER_PASSWORD"
         passwordField.emptyText.text = "For remote OpenCode servers"
         basePathField.toolTipText = "Override project base path for opencode.exe working directory"
@@ -148,31 +154,18 @@ class OpenCodeConnectDialog(
             return ValidationInfo("Server address cannot be empty", addressField)
         }
         
-        val parts = input.split(":")
-        if (parts.size != 2) {
-            return ValidationInfo("Invalid format. Expected: hostname:port", addressField)
+        if (parseAddress(input) == null) {
+            return ValidationInfo("Invalid format. Expected: hostname:port or https://hostname:port", addressField)
         }
-        
-        val host = parts[0].trim()
-        val portStr = parts[1].trim()
-        
-        if (host.isBlank()) {
-            return ValidationInfo("Hostname cannot be empty", addressField)
-        }
-        
-        val portNum = portStr.toIntOrNull()
-        if (portNum == null || portNum < 1 || portNum > 65535) {
-            return ValidationInfo("Port must be a number between 1 and 65535", addressField)
-        }
-        
+
         return null
     }
 
     override fun doOKAction() {
-        val input = addressField.text.trim()
-        val parts = input.split(":")
-        hostname = parts[0].trim()
-        port = parts[1].trim().toInt()
+        val parsed = requireNotNull(parseAddress(addressField.text)) { "Address validated by doValidate" }
+        hostname = parsed.hostname
+        port = parsed.port
+        scheme = parsed.scheme
 
         val passwordValue = passwordField.password.concatToString().trim()
         password = passwordValue.ifBlank { null }
@@ -184,7 +177,7 @@ class OpenCodeConnectDialog(
 
         // Save values for next time
         val props = PropertiesComponent.getInstance()
-        props.setValue(PROP_LAST_ADDRESS, "$hostname:$port")
+        props.setValue(PROP_LAST_ADDRESS, parsed.asAddress())
         
         // Save password (Base64 encoded for basic obfuscation)
         try {
@@ -222,21 +215,35 @@ class OpenCodeConnectDialog(
             return parseAddress(PropertiesComponent.getInstance().getValue(PROP_LAST_ADDRESS, ""))
         }
 
+        private val SCHEME_PREFIX = Regex("^(https?)://", RegexOption.IGNORE_CASE)
+
         internal fun parseAddress(value: String?): ServerAddress? {
-            val parts = value?.trim()?.split(":") ?: return null
+            val raw = value?.trim() ?: return null
+            if (raw.isEmpty()) return null
+
+            val scheme = SCHEME_PREFIX.find(raw)?.groupValues?.get(1)?.lowercase() ?: "http"
+            val withoutScheme = raw.replaceFirst(SCHEME_PREFIX, "")
+            val parts = withoutScheme.split(":")
             if (parts.size != 2) return null
 
             val hostname = parts[0].trim()
             val port = parts[1].trim().toIntOrNull()?.takeIf { it in 1..65535 } ?: return null
             if (hostname.isBlank()) return null
 
-            return ServerAddress(hostname, port)
+            return ServerAddress(hostname, port, scheme)
         }
 
         fun show(project: Project, defaultAddress: String): ConnectionInfo? {
             val dialog = OpenCodeConnectDialog(project, defaultAddress)
             return if (dialog.showAndGet()) {
-                ConnectionInfo(dialog.hostname, dialog.port, dialog.password, dialog.useWebInterface, dialog.customBasePath)
+                ConnectionInfo(
+                    dialog.hostname,
+                    dialog.port,
+                    dialog.password,
+                    dialog.useWebInterface,
+                    dialog.customBasePath,
+                    dialog.scheme
+                )
             } else {
                 null
             }

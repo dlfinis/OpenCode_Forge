@@ -38,6 +38,14 @@
       <keyboard-shortcut keymap="Mac OS X 10.5+" first-keystroke="meta ESCAPE"/>
     </action>
 
+    <action id="OpenCode.PreviousSession"
+            class="ai.opencode.ide.jetbrains.actions.OpenPreviousSessionAction"
+            text="Open Previous OpenCode Session"
+            description="Resume one of this project's existing OpenCode sessions"
+            icon="/icons/opencode.svg">
+      <add-to-group group-id="ToolsMenu" anchor="after" relative-to-action="OpenCode.StopServer"/>
+    </action>
+
     <action id="OpenCode.StopServer"
             class="ai.opencode.ide.jetbrains.actions.StopOpenCodeServerAction"
             text="Stop OpenCode Server"

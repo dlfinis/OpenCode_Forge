@@ -18,11 +18,12 @@ open class OpenCodeApiClient(
     private val hostname: String, 
     private val port: Int,
     private val username: String? = null,
-    private val password: String? = null
+    private val password: String? = null,
+    scheme: String = "http"
 ) {
 
     private val logger = Logger.getInstance(OpenCodeApiClient::class.java)
-    private val baseUrl = "http://$hostname:$port"
+    private val baseUrl = "$scheme://$hostname:$port"
 
     // Make client protected so subclasses can potentially use it or override methods
     protected val client = OkHttpClient.Builder()

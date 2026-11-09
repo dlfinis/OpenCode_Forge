@@ -21,7 +21,14 @@ object WebModeSupport {
         }
     }
 
-    fun openWebTab(project: Project, host: String, port: Int, password: String? = null, onClose: () -> Unit): OpenCodeWebVirtualFile? {
+    fun openWebTab(
+        project: Project,
+        host: String,
+        port: Int,
+        password: String? = null,
+        scheme: String = "http",
+        onClose: () -> Unit
+    ): OpenCodeWebVirtualFile? {
         if (!isJcefSupported()) {
             Messages.showErrorDialog(project, "JCEF (Embedded Browser) is not supported in this IDE environment.", "Web Interface Error")
             return null
@@ -37,9 +44,9 @@ object WebModeSupport {
             URLEncoder.encode(serverPath, "UTF-8")
         }
         val url = if (directoryParam != null) {
-            "http://$browserHost:$port/?directory=$directoryParam"
+            "$scheme://$browserHost:$port/?directory=$directoryParam"
         } else {
-            "http://$browserHost:$port/"
+            "$scheme://$browserHost:$port/"
         }
         
         val tabName = "OpenCode Web($port)"

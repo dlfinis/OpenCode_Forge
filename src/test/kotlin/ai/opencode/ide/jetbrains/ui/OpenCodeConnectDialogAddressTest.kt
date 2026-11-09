@@ -17,6 +17,32 @@ class OpenCodeConnectDialogAddressTest {
     }
 
     @Test
+    fun parsesAnHttpsAddressAndKeepsTheScheme() {
+        val parsed = OpenCodeConnectDialog.parseAddress("https://opencode.example.test:443")
+
+        assertEquals(ServerAddress("opencode.example.test", 443, "https"), parsed)
+        assertEquals("https://opencode.example.test:443", parsed?.asAddress())
+    }
+
+    @Test
+    fun parsesAnExplicitHttpAddressAsPlainHttp() {
+        assertEquals(ServerAddress("example.test", 4096, "http"), OpenCodeConnectDialog.parseAddress("http://example.test:4096"))
+    }
+
+    @Test
+    fun defaultsToHttpWhenNoSchemeIsGiven() {
+        assertEquals(ServerAddress("example.test", 4096, "http"), OpenCodeConnectDialog.parseAddress("example.test:4096"))
+        assertEquals("example.test:4096", ServerAddress("example.test", 4096).asAddress())
+    }
+
+    @Test
+    fun keepsTheSchemeWhenReusingARememberedRemoteAddress() {
+        val remembered = ServerAddress("opencode.example.test", 443, "https")
+
+        assertEquals("https://opencode.example.test:443", chooseConnectionAddress(remembered, null))
+    }
+
+    @Test
     fun prefersAnExplicitlyRememberedRemoteAddressOverLocalDiscovery() {
         val remembered = ServerAddress("opencode.example.test", 4096)
 

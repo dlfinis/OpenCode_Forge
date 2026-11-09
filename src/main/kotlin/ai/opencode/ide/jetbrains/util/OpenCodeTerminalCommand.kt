@@ -27,7 +27,9 @@ internal object OpenCodeTerminalCommand {
         password: String?,
         continueSession: Boolean,
         useServiceDiscoveryAuth: Boolean,
-        shell: ShellFamily
+        shell: ShellFamily,
+        scheme: String = "http",
+        sessionId: String? = null
     ): String {
         val executablePath = normalizeWindowsPath(binary, shell)
         val executable = when (shell) {
@@ -35,11 +37,19 @@ internal object OpenCodeTerminalCommand {
             ShellFamily.POSIX, ShellFamily.WSL -> shellQuote(executablePath)
             ShellFamily.CMD -> windowsQuoteIfNeeded(executablePath)
         }
-        val suffix = if (continueSession) " --continue" else ""
+        val suffix = when {
+            sessionId != null -> " --session " + when (shell) {
+                ShellFamily.POWERSHELL -> powershellQuote(sessionId)
+                ShellFamily.POSIX, ShellFamily.WSL -> shellQuote(sessionId)
+                ShellFamily.CMD -> windowsQuoteIfNeeded(sessionId)
+            }
+            continueSession -> " --continue"
+            else -> ""
+        }
         if (useServiceDiscoveryAuth) return executable + suffix
 
         val connectHost = if (hostname == "0.0.0.0") "127.0.0.1" else hostname
-        val url = "http://$connectHost:$port"
+        val url = "$scheme://$connectHost:$port"
         val urlArgument = when (shell) {
             ShellFamily.POWERSHELL -> powershellQuote(url)
             ShellFamily.POSIX, ShellFamily.WSL -> shellQuote(url)

@@ -1,3 +1,5 @@
+import java.io.File
+
 plugins {
     id("java")
     id("org.jetbrains.kotlin.jvm") version "2.2.20"
@@ -92,11 +94,24 @@ intellijPlatform {
     }
 }
 
+// Real-process tests spawn the opencode CLI and a real server. CI runners do not have the CLI,
+// and BasePlatformTestCase runs on JUnit 3, where an assumption thrown from setUp() is reported
+// as a failure instead of a skip. Exclude the class when the binary is absent.
+val openCodeCliOnPath = System.getenv("PATH").orEmpty()
+    .split(System.getProperty("path.separator"))
+    .any { File(it, "opencode").canExecute() }
+
 tasks {
     // The IntelliJ Platform Gradle Plugin applies the platform JDK toolchain (21 for 2025.2+),
     // and that toolchain drives both the Java and the Kotlin target. Do not override one side
     // alone: a mismatched jvmTarget fails the build, and a lower target than the platform's
     // JDK no longer buys compatibility because sinceBuild = 252 already requires JBR 21.
+
+    withType<Test> {
+        if (!openCodeCliOnPath) {
+            exclude("**/RealProcessIntegrationTest*")
+        }
+    }
 
     withType<org.jetbrains.intellij.platform.gradle.tasks.RunIdeTask> {
         systemProperty("ide.no.platform.update", "true")

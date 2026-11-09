@@ -5,7 +5,6 @@ import ai.opencode.ide.jetbrains.api.OpenCodeApiClient
 import ai.opencode.ide.jetbrains.diff.DiffViewerService
 import ai.opencode.ide.jetbrains.session.SessionManager
 import ai.opencode.ide.jetbrains.util.PortFinder
-import org.junit.Assume.assumeTrue
 import com.intellij.openapi.components.service
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import java.io.File
@@ -23,14 +22,13 @@ class RealProcessIntegrationTest : BasePlatformTestCase() {
         // Find an available port first
         port = PortFinder.findAvailablePort()
         
-        // Find opencode executable. A machine without the CLI cannot run these tests, and that
-        // is not a failure of the plugin: skip instead of failing so CI stays meaningful.
+        // Find opencode executable. The build excludes this class when the CLI is absent
+        // (see build.gradle.kts), because BasePlatformTestCase runs on JUnit 3 and treats an
+        // assumption thrown from setUp() as a failure rather than a skip.
         val path = System.getenv("PATH").orEmpty().split(File.pathSeparator)
             .map { File(it, "opencode") }
             .firstOrNull { it.exists() && it.canExecute() }
-            ?.absolutePath
-        assumeTrue("opencode CLI not available on PATH; skipping real-process integration tests", path != null)
-        checkNotNull(path)
+            ?.absolutePath ?: throw IllegalStateException("opencode binary not found in PATH")
 
         println("Launching opencode: $path serve --port $port")
         
@@ -59,7 +57,9 @@ class RealProcessIntegrationTest : BasePlatformTestCase() {
             username = "opencode",
             password = serverPassword
         )
-        assumeTrue("opencode server did not start on port $port; skipping", ready)
+        if (!ready) {
+            throw IllegalStateException("opencode server failed to start on port $port")
+        }
     }
 
     override fun tearDown() {

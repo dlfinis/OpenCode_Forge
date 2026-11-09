@@ -1708,6 +1708,9 @@ class OpenCodeService(private val project: Project) : Disposable {
         val h = hostname
         val p = port ?: return
         val pwd = password
+        // disconnectAndReset() restores the default scheme, so a restart of a TLS connection
+        // would silently fall back to http and fail every request.
+        val previousScheme = scheme
         val ownership = serverOwnership
         val expectedSharedServer = sharedServerIdentity
 
@@ -1764,6 +1767,7 @@ class OpenCodeService(private val project: Project) : Disposable {
         hostname = h
         port = p
         password = pwd
+        scheme = previousScheme
         lastMode = m
         if (m == ConnectionMode.WEB) createWebTerminal(h, p, pwd)
         else if (m == ConnectionMode.REMOTE) {

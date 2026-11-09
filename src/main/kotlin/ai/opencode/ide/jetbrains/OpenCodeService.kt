@@ -76,6 +76,8 @@ class OpenCodeService(private val project: Project) : Disposable {
         private const val OPEN_CODE_TAB_PREFIX = "OpenCode"
         private const val RETRY_INTERVAL_MS = 5000L
         private const val BARRIER_TIMEOUT_MS = 2000L
+        private const val SERVICE_START_TIMEOUT_MS = 20000L
+        private const val SERVICE_POLL_INTERVAL_MS = 500L
         private const val GENERATED_PASSWORD_PROPERTY = "opencode.generatedPassword"
         private const val VERSION_WARNING_SHOWN_PROPERTY = "opencode.versionWarningShown"
         private const val PASSWORD_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
@@ -1042,12 +1044,7 @@ class OpenCodeService(private val project: Project) : Disposable {
 
                                 ServiceDiscovery.DiscoveryResult.Missing -> {
                                     lastMode = if (web) ConnectionMode.WEB else ConnectionMode.TERMINAL
-                                    val serverPassword = resolveServerPassword(pwd)
-                                    if (web) {
-                                        createWebTerminal(safeH, p, serverPassword, customBasePath)
-                                    } else {
-                                        createLocalTerminal(safeH, p, serverPassword, customBasePath)
-                                    }
+                                    startSharedServiceAndAttach(web, customBasePath)
                                 }
                             }
                         }
@@ -1290,6 +1287,85 @@ class OpenCodeService(private val project: Project) : Disposable {
                 initializeApiClient(h, p)
                 startConnectionManager()
             }
+        }
+    }
+
+    /**
+     * OpenCode v2 owns the server lifecycle. `opencode service start` brings up the background
+     * service, registers it in service.json, and every client resolves the endpoint and its
+     * credentials from that file. Spawning a private `opencode serve` per IDE instance instead
+     * duplicated the process, and forced the plugin to generate a password and type it into the
+     * terminal, where it ended up in the shell history.
+     *
+     * The command is idempotent: with a service already running it returns the same endpoint
+     * without restarting it.
+     */
+    private fun startSharedServiceAndAttach(web: Boolean, customBasePath: String?) {
+        AppExecutorUtil.getAppExecutorService().submit {
+            val binary = detectOpenCodeBinary()
+            if (binary == null) {
+                showCliNotFoundError()
+                return@submit
+            }
+
+            val started = runServiceStart(binary)
+            ServiceDiscovery.invalidateCache()
+
+            val deadline = System.currentTimeMillis() + SERVICE_START_TIMEOUT_MS
+            var resolved: ServiceDiscovery.SharedServer? = null
+            while (resolved == null && System.currentTimeMillis() < deadline) {
+                val result = ServiceDiscovery.discoverSharedServer()
+                if (result is ServiceDiscovery.DiscoveryResult.Registered &&
+                    result.health is OpenCodeHealthResult.Healthy
+                ) {
+                    resolved = result.server
+                } else {
+                    try {
+                        Thread.sleep(SERVICE_POLL_INTERVAL_MS)
+                    } catch (e: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        break
+                    }
+                }
+            }
+
+            val server = resolved
+            ApplicationManager.getApplication().invokeLater {
+                if (project.isDisposed) return@invokeLater
+                if (server == null) {
+                    sendNotification(
+                        "OpenCode Service Not Available",
+                        if (started) {
+                            "The OpenCode background service did not register within " +
+                                "${SERVICE_START_TIMEOUT_MS / 1000} seconds."
+                        } else {
+                            "Could not start the OpenCode background service. Check that the " +
+                                "OpenCode CLI is installed and up to date."
+                        },
+                        NotificationType.ERROR
+                    )
+                    return@invokeLater
+                }
+                connectToSharedServer(server, web, customBasePath)
+            }
+        }
+    }
+
+    private fun runServiceStart(binary: String): Boolean {
+        return try {
+            val output = CapturingProcessHandler(
+                GeneralCommandLine(binary, "service", "start")
+            ).runProcess(SERVICE_START_TIMEOUT_MS.toInt())
+            if (output.isTimeout) {
+                logger.warn("[OpenCode] 'opencode service start' timed out")
+                false
+            } else {
+                logger.info("[OpenCode] 'opencode service start' exited with ${output.exitCode}")
+                output.exitCode == 0
+            }
+        } catch (e: Exception) {
+            logger.warn("[OpenCode] Could not run 'opencode service start'", e)
+            false
         }
     }
 

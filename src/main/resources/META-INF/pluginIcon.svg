@@ -1,0 +1,20 @@
+<svg width="80" height="80" viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="auro" x1="10" y1="6" x2="70" y2="74" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFD166"/>
+      <stop offset="0.55" stop-color="#F2A93B"/>
+      <stop offset="1" stop-color="#C9760A"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Auropia mark: gold field, dark frame with a filled lower block. -->
+  <rect width="80" height="80" rx="18" fill="url(#auro)"/>
+
+  <!-- Frame: outer square minus the inner window. -->
+  <path fill-rule="evenodd" clip-rule="evenodd"
+        d="M22 20h36v44H22V20Zm9 9v26h18V29H31Z"
+        fill="#2A1A00"/>
+
+  <!-- Lower block inside the window. -->
+  <rect x="31" y="42" width="18" height="13" fill="#2A1A00"/>
+</svg>

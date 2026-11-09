@@ -50,6 +50,11 @@ intellijPlatform {
                 <li>Improved: The plugin archive no longer bundles kotlin-stdlib and uses the IDE's copy, shrinking the download from 3.2 MB to 1.9 MB.</li>
                 <li>Improved: Build toolchain refreshed (Gradle 9.9.0, IntelliJ Platform Gradle Plugin 2.20.0, Kotlin 2.2.20, OkHttp 5.5.1, Gson 2.14.0).</li>
                 <li>Improved: Removed the unused okhttp-sse dependency.</li>
+                <li>Fix: Accept no longer reports "Failed to stage" for files listed in .gitignore.</li>
+                <li>Fix: HTTPS servers are supported (https://host:port), including the terminal and the web tab.</li>
+                <li>Fix: Connecting to a remote server opens an interactive terminal instead of a headless session.</li>
+                <li>Fix: Restarting a TLS connection keeps using https instead of falling back to http.</li>
+                <li>New: Tools > Open Previous OpenCode Session resumes one of this project's sessions.</li>
             </ul>
             <h2>1.2.0</h2>
             <ul>

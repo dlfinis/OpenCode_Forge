@@ -50,6 +50,7 @@ import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.ui.SystemNotifications
 import com.intellij.util.concurrency.AppExecutorUtil
 
+import com.intellij.terminal.ui.TerminalWidget
 import org.jetbrains.plugins.terminal.ShellTerminalWidget
 import org.jetbrains.plugins.terminal.TerminalToolWindowManager
 import org.jetbrains.plugins.terminal.TerminalProjectOptionsProvider
@@ -1438,6 +1439,24 @@ class OpenCodeService(private val project: Project) : Disposable {
         }
     }
 
+    /**
+     * createShellWidget registers a Content in the Terminal tool window, selects it and activates
+     * the window. This plugin hosts the widget in its own editor tab, so that Content would remain
+     * behind as an empty tab.
+     *
+     * The Content is removed WITHOUT disposing it: disposing would destroy the widget we are about
+     * to reuse. The window is closed only when our content was the last one, so a window holding
+     * the user's own terminals is left alone.
+     */
+    internal fun removeTerminalToolWindowContent(widget: TerminalWidget) {
+        val terminalToolWindow = TerminalToolWindowManager.getInstance(project).toolWindow ?: return
+        val contentManager = terminalToolWindow.contentManager
+        contentManager.contents
+            .firstOrNull { TerminalToolWindowManager.findWidgetByContent(it) === widget }
+            ?.let { contentManager.removeContent(it, false) }
+        if (contentManager.contents.isEmpty()) terminalToolWindow.hide()
+    }
+
     private fun createTerminalUIInternal(
         h: String,
         p: Int,
@@ -1471,20 +1490,7 @@ class OpenCodeService(private val project: Project) : Disposable {
         val terminalManager = TerminalToolWindowManager.getInstance(project)
         val createdWidget = terminalManager.createShellWidget(wd, t, true, true)
         val w = ShellTerminalWidget.toShellJediTermWidgetOrThrow(createdWidget)
-        // createShellWidget registers a Content in the Terminal tool window and activates it. This
-        // plugin hosts the widget in its own editor tab, so that Content would remain behind as an
-        // empty tab. Remove it WITHOUT disposing: disposing would destroy the widget we are about
-        // to reuse.
-        terminalManager.toolWindow?.let { terminalToolWindow ->
-            val contentManager = terminalToolWindow.contentManager
-            contentManager.contents
-                .firstOrNull { TerminalToolWindowManager.findWidgetByContent(it) === createdWidget }
-                ?.let { contentManager.removeContent(it, false) }
-            // createShellWidget also activated the tool window. If our content was the only one,
-            // it is now an empty window the user never asked for, so close it. A window that still
-            // holds the user's own terminals is left alone.
-            if (contentManager.contents.isEmpty()) terminalToolWindow.hide()
-        }
+        removeTerminalToolWindowContent(createdWidget)
         OpenCodeTerminalLinkFilter.install(project, w)
         val f = OpenCodeTerminalVirtualFile(t)
         terminalVirtualFile = f; OpenCodeTerminalFileEditorProvider.registerWidget(f, w)

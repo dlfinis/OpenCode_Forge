@@ -1,0 +1,101 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: zulu
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      # Catches the configuration mistakes that only show up at runtime, such as a
+      # bundled Kotlin stdlib conflicting with the one the platform provides.
+      - name: Verify plugin configuration
+        run: ./gradlew verifyPluginProjectConfiguration --console=plain
+
+      - name: Build and test
+        run: ./gradlew build --console=plain
+
+      - name: Assemble plugin archive
+        run: ./gradlew buildPlugin --console=plain
+
+      - name: Upload plugin archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: plugin-archive
+          path: build/distributions/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: zulu
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Assemble plugin archive
+        run: ./gradlew buildPlugin --console=plain
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          archive=$(find build/distributions -maxdepth 1 -name '*.zip' | head -n 1)
+          if [ -z "$archive" ]; then
+            echo "No plugin archive was produced" >&2
+            exit 1
+          fi
+
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$archive" --clobber
+            exit 0
+          fi
+
+          notes="releaseNotes/$(echo "$GITHUB_REF_NAME" | tr -d '.v').md"
+          if [ -f "$notes" ]; then
+            gh release create "$GITHUB_REF_NAME" "$archive" \
+              --title "OpenCode Forge $GITHUB_REF_NAME" \
+              --notes-file "$notes"
+          else
+            gh release create "$GITHUB_REF_NAME" "$archive" \
+              --title "OpenCode Forge $GITHUB_REF_NAME" \
+              --generate-notes
+          fi

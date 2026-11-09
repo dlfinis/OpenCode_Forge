@@ -3,7 +3,7 @@
 [![Release](https://img.shields.io/github/v/release/dlfinis/OpenCode_Forge)](https://github.com/dlfinis/OpenCode_Forge/releases)
 [![Build](https://github.com/dlfinis/OpenCode_Forge/actions/workflows/build.yml/badge.svg)](https://github.com/dlfinis/OpenCode_Forge/actions/workflows/build.yml)
 ![IntelliJ Platform](https://img.shields.io/badge/IntelliJ%20Platform-2025.2%2B-orange)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 
 **OpenCode Forge** integrates [OpenCode](https://opencode.ai) — the open-source AI coding agent —
 natively into JetBrains IDEs. Connect to an OpenCode v2 server and drive an autonomous agent without
@@ -127,7 +127,8 @@ Planned improvements, tracked in [releaseNotes/](releaseNotes/) and the
 ## Credits and lineage
 
 OpenCode Forge is a derivative work of **[OpenCode UI](https://github.com/LaiZhou/OpenCode_UI)** by
-**LaiZhou**, under the MIT License; the full commit history is preserved in this repository.
+**LaiZhou**, originally under the MIT License; the full commit history is preserved in this
+repository and the original copyright notice is retained in [NOTICE](NOTICE).
 
 The fork was made as an improvement over the original. OpenCode UI targeted the OpenCode **v1**
 server API and stopped receiving updates; OpenCode Forge was rebuilt around **v2** — typed `/api/...`
@@ -142,4 +143,7 @@ fork introduces is recorded in [releaseNotes/](releaseNotes/), and development c
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+**GPL-3.0** — see [LICENSE](LICENSE). Derivative works must stay under the same license and keep the
+copyright notices in [NOTICE](NOTICE), which also preserves the MIT notice of the original
+OpenCode UI code this project derives from. Releases published before the move (up to 1.2.1) remain
+available under MIT.

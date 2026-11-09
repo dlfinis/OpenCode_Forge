@@ -1,0 +1,45 @@
+OpenCode Forge
+Copyright (C) 2026 Diego F. Leon and OpenCode Forge contributors
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License version 3 as published by
+the Free Software Foundation. See the LICENSE file for the full text.
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+more details.
+
+-----------------------------------------------------------------------------
+
+THIRD-PARTY NOTICES
+
+This project is a derivative work of OpenCode UI
+(https://github.com/LaiZhou/OpenCode_UI), Copyright (c) 2026 LaiZhou,
+originally distributed under the MIT License, reproduced below. The MIT
+license permits sublicensing derivative works under other terms provided its
+copyright and permission notices are retained; this project satisfies that
+requirement here. Versions of OpenCode Forge published before the move to
+GPL-3.0 (up to and including 1.2.1) remain available under the MIT License.
+
+MIT License
+
+Copyright (c) 2026 LaiZhou
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

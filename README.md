@@ -1,194 +1,145 @@
 # OpenCode Forge
 
-[![JetBrains Plugin](https://img.shields.io/badge/JetBrains-Plugin-blue)](https://plugins.jetbrains.com)
-[![OpenCode](https://img.shields.io/badge/OpenCode-AI%20Agent-green)](https://opencode.ai)
+[![Release](https://img.shields.io/github/v/release/dlfinis/OpenCode_Forge)](https://github.com/dlfinis/OpenCode_Forge/releases)
+[![Build](https://github.com/dlfinis/OpenCode_Forge/actions/workflows/build.yml/badge.svg)](https://github.com/dlfinis/OpenCode_Forge/actions/workflows/build.yml)
+![IntelliJ Platform](https://img.shields.io/badge/IntelliJ%20Platform-2025.2%2B-orange)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-**OpenCode Forge** puts the [OpenCode](https://opencode.ai) AI coding agent natively inside your
-JetBrains IDE: connect to an OpenCode v2 server and drive an autonomous coding agent without leaving
-the IDE you already live in.
+**OpenCode Forge** integrates [OpenCode](https://opencode.ai) — the open-source AI coding agent —
+natively into JetBrains IDEs. Connect to an OpenCode v2 server and drive an autonomous agent without
+leaving the editor: launch a session with one keystroke, share code context, and review every
+AI-generated change in the IDE's native diff viewer.
 
-> **Community fork of [OpenCode UI](https://github.com/LaiZhou/OpenCode_UI) by LaiZhou**, rebuilt as
-> the answer to the **OpenCode v2** move: full v2 compatibility and functionality after the original
-> project stopped receiving updates and stayed on the v1 API. See [Credits and lineage](#credits-and-lineage).
+> Community continuation of **[OpenCode UI](https://github.com/LaiZhou/OpenCode_UI)** by LaiZhou,
+> forked as an improvement over the original: full **OpenCode v2** compatibility and active
+> development. See [Credits and lineage](#credits-and-lineage).
 
 ## Features
 
-| Feature | Description | Shortcut (Mac) | Shortcut (Win/Linux) |
-|---------|-------------|----------------|----------------------|
-| **Quick Launch** | Connect to existing OpenCode server or create new terminal | `Cmd + Esc` | `Ctrl + \` |
-| **Add to Terminal** | Send current file/selection or selected files to OpenCode | `Opt + Cmd + K` | `Ctrl + Alt + K` |
-| **Diff Review** | View diffs and accept/reject changes in IDE | — | — |
-| **Notifications** | System alert when task completes | — | — |
-| **Auto-Resume** | Restore last session on launch | — | — |
-| **Smart Links** | Clickable file paths in terminal | — | — |
-| **Auth Support** | Optional password for OpenCode server | — | — |
-| **Local Change Alert** | Warn when local edits differ from AI output | — | — |
+| Feature | What it does | Mac | Win/Linux |
+|---|---|---|---|
+| **Quick Launch** | Connect to a running OpenCode server or spin up a new terminal session | `Cmd + Esc` | `Ctrl + \` |
+| **Context Sharing** | Send the current file, the editor selection, or Project View items to the agent draft | `Opt + Cmd + K` | `Ctrl + Alt + K` |
+| **Diff Review** | Native multi-file diff viewer with one-click Accept / Reject | — | — |
+| **Task Notifications** | System alert the moment the agent finishes | — | — |
+| **Auto-Resume** | Restores the last session on launch | — | — |
+| **Smart Links** | `@file#L10-20` references in terminal output are clickable | — | — |
+| **Authentication** | Auto-detected credentials or optional server password | — | — |
+| **Local Change Alert** | Warns when your edits diverge from the AI output | — | — |
 
-### Feature Comparison with Claude Code
-
-| Feature | Claude Code | OpenCode |
-|---------|-------------|----------|
-| Quick Launch | ✅ | ✅ |
-| Diff Viewing | ✅ | ✅ |
-| File Reference Shortcuts | ✅ | ✅ |
-| Diagnostic Sharing | ✅ | ❌ (uses built-in LSP) |
-
-### Sidebar Icon
-
-Click the **OpenCode** icon in the right sidebar to instantly focus or create an OpenCode terminal session.
-
-### Context Menus
-
-- **Editor**: Right-click in editor → *OpenCode: Add Context*
-- **Project View**: Right-click on files/folders → *OpenCode: Add File(s)*
+Shortcuts are customizable in **Settings → Keymap** (search *OpenCode*). The plugin is also reachable
+from the **OpenCode** tool-window icon and from editor / Project View context menus
+(*OpenCode: Add Context* / *Add File(s)*).
 
 ## Requirements
 
-- **JetBrains IDE**: IntelliJ IDEA, WebStorm, PyCharm, etc. (2025.2+)
-- **OpenCode CLI**: Install the v2 CLI with `curl -fsSL https://opencode.ai/v2/install | bash` or see [opencode.ai/download](https://opencode.ai/download)
-- **OpenCode v2 only**: the plugin talks to the v2 server API (`/api/info`, `/api/session`, `patch`-based diffs). A v1 server is detected and reported as unsupported — upgrade the CLI first.
+- **JetBrains IDE** 2025.2 or newer (IntelliJ IDEA, PyCharm, WebStorm, GoLand, …)
+- **OpenCode CLI v2** — `curl -fsSL https://opencode.ai/v2/install | bash`, or see
+  [opencode.ai/download](https://opencode.ai/download)
+- The plugin speaks the **v2 server API only** (`/api/info`, `/api/session`, patch-based diffs).
+  A v1 server is detected and reported as unsupported — upgrade the CLI first.
 
 ## Installation
 
-This plugin is not on the JetBrains Marketplace yet. Install it from the release archive:
+Not on the JetBrains Marketplace yet — install from the release archive:
 
 1. Download `OpenCode_Forge-<version>.zip` from [Releases](https://github.com/dlfinis/OpenCode_Forge/releases).
-2. In your IDE open **Settings** → **Plugins** → ⚙ → **Install Plugin from Disk…**
+2. Open **Settings → Plugins → ⚙ → Install Plugin from Disk…**
 3. Select the archive and restart the IDE.
 
-If you already have the original **OpenCode UI** installed, it stays installed as a *separate*
-plugin: this fork declares its own id (`io.github.dlfinis.opencode.forge`) and does not upgrade the
-original in place. Uninstall the original if you do not want both.
+OpenCode Forge declares its own plugin id (`io.github.dlfinis.opencode.forge`), so it coexists with
+the original OpenCode UI instead of upgrading it in place. Uninstall the original if you don't want both.
 
 ## Usage
 
-### 1. Launch OpenCode Terminal
+### 1. Connect or launch
 
-Press `Cmd+Esc` (Mac) or `Ctrl+\` (Win/Linux) to open the connection dialog. You can:
+`Cmd+Esc` / `Ctrl+\` opens the connection dialog:
 
-- **Connect to existing server**: Enter `host:port` (e.g., `127.0.0.1:58052`) and optional password to connect to OpenCode Desktop or any running OpenCode server. Authentication is detected automatically if available.
-- **Create new terminal**: Use default `127.0.0.1:4096` to create a local OpenCode terminal session. The terminal tab will be named `OpenCode(4096)`.
+- **Existing server** — enter `host:port` (e.g. `127.0.0.1:58052`) to attach to OpenCode Desktop or
+  any running server, over http or https, local or remote. Credentials are detected automatically;
+  a password is optional.
+- **New terminal** — keep the default `127.0.0.1:4096` to spin up a local session.
 
-*Your last connection settings (address, mode, password) are remembered automatically.*
+Your last connection settings are remembered. Each project keeps a single terminal tab named
+`OpenCode({port})` that persists across actions; if you close it, the next launch creates a fresh one.
 
-![Step 1: Launch OpenCode](images/1.png)
+![Connection dialog](images/1.png)
 
-### 2. Send Code Context to OpenCode
+### 2. Share code context
 
-In the editor or Project View, press `Opt+Cmd+K` (Mac) or `Ctrl+Alt+K` (Win/Linux).
+`Opt+Cmd+K` / `Ctrl+Alt+K` from the editor or Project View inserts a reference into the agent draft —
+it is not submitted, so you can type your request around it:
 
-- If the OpenCode terminal is not open yet, the plugin creates/focuses it automatically.
-- In the editor, it shares the **current file** even if nothing is selected.
-- Context is inserted into the OpenCode terminal draft; it is not submitted as a prompt.
+- **Editor selection** → `@path/to/file.kt#L10-25`
+- **Editor, no selection** → the current file
+- **Project View** → one reference per selected file
 
-![Step 2: Selection](images/2.png)
+![Select context](images/2.png)
+![Reference in the terminal draft](images/3.png)
 
-The plugin will send:
+### 3. Review diffs
 
-- **Editor selection**: `@path/to/file.kt#L10-25`
-- **Editor (no selection)**: `@path/to/file.kt`
-- **Project View selection**: `@path/to/file.kt` for each selected file
+When the agent finishes a response, the native diff viewer opens automatically with every file it
+touched, in chronological order:
 
-![Step 3: Result in Terminal](images/3.png)
+- **Navigate** — `← →` switch files, `↑ ↓` jump between changes; the title tracks progress (e.g. `1 of 5`).
+- **Accept** — keeps the AI change and stages the file (`git add`), then opens the next one.
+- **Reject** — restores the file to its snapshot from before the AI edited it, then opens the next one.
+- A **`(Local Modified)`** marker appears when your file differs from the AI output.
 
-This allows OpenCode to understand the context of your question or request.
+![Diff viewer — accept](images/5.png)
+![Diff viewer — reject](images/6.png)
 
-### 3. Sidebar Button
+### 4. Stay in flow
 
-Click the OpenCode icon in the right sidebar to quickly focus or create the OpenCode terminal.
+- **Notifications** fire when a task completes (Busy → Idle), so you can switch to other work while
+  the agent runs. On macOS, allow notifications for your IDE in *System Settings → Notifications*.
+- **Smart links** — clicking a `@src/main/kotlin/Main.kt#L10-20` reference in terminal output opens
+  the file and highlights the lines.
+- The **OpenCode tool-window icon** focuses or creates the session at any time.
 
-![Step 4: Sidebar Button](images/4.png)
+![Tool window](images/4.png)
 
-### 4. Review Diffs
+## Roadmap
 
-When OpenCode edits files, the plugin opens a native IDE diff viewer.
+Planned improvements, tracked in [releaseNotes/](releaseNotes/) and the
+[issue tracker](https://github.com/dlfinis/OpenCode_Forge/issues):
 
-- **Chronological View**: Changes are shown in the order they were made, starting from the first modified file.
-- **Navigation**: Use **← →** arrows to switch files and **↑ ↓** arrows to jump between changes.
-- **Trigger**: The diff viewer opens automatically when OpenCode finishes a response (session idle).
-- **Progress**: The title shows your review progress (e.g., `1 of 5`) for multi-file changes.
-- **Accept**: Writes the AI's changes to disk and stages the file (git add). Automatically opens the next file.
-- **Reject**: Restores the file to its state before the AI started editing. Automatically opens the next file.
-- **Local Modified**: The diff title shows `(Local Modified)` when your file differs from AI output.
-
-![Diff Viewer - Accept](images/5.png)
-![Diff Viewer - Reject](images/6.png)
-
-### 5. Task Notifications
-
-The plugin sends a system notification when OpenCode finishes a task (transitions from Busy to Idle). This allows you to switch to other work while the AI is generating code, and be notified immediately when it's done.
-
-> **Tip**: To receive desktop notifications, please ensure your operating system allows notifications for the JetBrains IDE (e.g., on macOS: *System Settings > Notifications > IntelliJ IDEA*).
-
-### 6. Smart File Links
-
-File paths in the terminal output (e.g., `@src/main/kotlin/Main.kt#L10-20`) are clickable. Clicking them opens the file in the editor and highlights the referenced lines.
-
-## Keyboard Shortcuts
-
-All shortcuts are customizable via **Settings** → **Keymap** → search for "OpenCode".
-
-| Action | Mac | Windows/Linux |
-|--------|-----|---------------|
-| Open/Focus OpenCode | `Cmd + Esc` | `Ctrl + \` |
-| Add to OpenCode Terminal | `Opt + Cmd + K` | `Ctrl + Alt + K` |
-
-## Terminal Management
-
-The plugin uses a single terminal tab per project named **"OpenCode({port})"**.
-
-- Only one OpenCode terminal session per project
-- The terminal persists across plugin actions
-- Closing the terminal tab will create a new one on next launch
+- Publish on the JetBrains Marketplace
+- Connection recovery on reconnect
+- More robust diff review across working directories
+- Checkout-aware diff attribution (separate `git checkout` changes from AI edits)
 
 ## Troubleshooting
 
-### "opencode: command not found"
-
-Install the OpenCode CLI:
-
-```bash
-curl -fsSL https://opencode.ai/v2/install | bash
-```
-
-Alternatively, install with `npm install -g @opencode/cli` or download from [opencode.ai/download](https://opencode.ai/download).
-
-### Terminal not responding
-
-Try closing the "OpenCode({port})" terminal tab and pressing `Cmd+Esc` or `Ctrl+\` again to create a fresh session.
-
-### Shortcuts not working
-
-1. Check for conflicts in **Settings** → **Keymap**
-2. Search for your shortcut to see if it's assigned to another action
-3. Reassign or remove conflicting shortcuts
+| Symptom | Fix |
+|---|---|
+| `opencode: command not found` | Install the CLI: `curl -fsSL https://opencode.ai/v2/install | bash` (or `npm install -g @opencode/cli`) |
+| Terminal not responding | Close the `OpenCode({port})` tab and press `Cmd+Esc` / `Ctrl+\` again for a fresh session |
+| Shortcuts not working | Look for conflicts in **Settings → Keymap** and reassign |
 
 ## Support
 
-- [OpenCode Documentation](https://opencode.ai/docs)
-- [GitHub Issues](https://github.com/anomalyco/opencode/issues)
-- [Discord Community](https://opencode.ai/discord)
+- **This plugin** — [GitHub Issues](https://github.com/dlfinis/OpenCode_Forge/issues)
+- **OpenCode itself** — [documentation](https://opencode.ai/docs) · [Discord](https://opencode.ai/discord)
 
 ## Credits and lineage
 
-This project is a derivative work based on **[OpenCode UI](https://github.com/LaiZhou/OpenCode_UI)** by
-**LaiZhou**, licensed under the MIT License. The full commit history is preserved in this repository.
+OpenCode Forge is a derivative work of **[OpenCode UI](https://github.com/LaiZhou/OpenCode_UI)** by
+**LaiZhou**, under the MIT License; the full commit history is preserved in this repository.
 
-- **LaiZhou** — original project: plugin architecture, terminal, diff viewer, notifications, documentation.
-- **Milos Zivkovic** — connection dialog base-path field and project-module selector.
-- **Michael Bauer** — README improvements.
+The fork was made as an improvement over the original. OpenCode UI targeted the OpenCode **v1**
+server API and stopped receiving updates; OpenCode Forge was rebuilt around **v2** — typed `/api/...`
+clients, patch-based diffs, https and remote connections, session resume, shared-service discovery,
+and a v1 server detected and reported as unsupported instead of failing silently. Every change the
+fork introduces is recorded in [releaseNotes/](releaseNotes/), and development continues under the
+[roadmap](#roadmap) above.
 
-What this fork changes is recorded in [releaseNotes/](releaseNotes/). OpenCode Forge was forked from
-the original as an improvement — **v2 compatibility and functionality end to end**. The original
-targets the OpenCode v1 server API, which no longer matches the installed CLI; this fork ships typed
-`/api/...` clients and patch-based diffs rebuilt for v2, https and remote connections, session resume,
-shared-service discovery, and a v1 server detected and reported as unsupported instead of failing
-silently.
-
-The work continues: planned improvements include connection recovery on reconnect, more robust diff
-review across working directories, and checkout-aware diff attribution. Track them in
-[releaseNotes/](releaseNotes/) and the [issue tracker](https://github.com/dlfinis/OpenCode_Forge/issues).
+- **LaiZhou** — original project: plugin architecture, terminal, diff viewer, notifications, documentation
+- **Milos Zivkovic** — connection dialog base-path field and project-module selector
+- **Michael Bauer** — README improvements
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
+MIT — see [LICENSE](LICENSE).

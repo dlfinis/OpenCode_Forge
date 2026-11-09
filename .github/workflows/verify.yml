@@ -2,17 +2,21 @@ name: Verify compatibility
 
 # Cross-version compatibility is checked here, not on a developer machine: every
 # verifier target downloads a full IDE distribution (1.5 GB+ each).
+#
+# No `schedule` trigger: GitHub disables scheduled workflows on forked
+# repositories, and a workflow carrying one fails to start on dispatch.
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 5 * * 1'
+  push:
+    branches: [main]
+    paths:
+      - 'build.gradle.kts'
+      - 'gradle.properties'
+      - 'src/main/**'
+      - '.github/workflows/verify.yml'
 
 permissions:
   contents: read
-
-concurrency:
-  group: verify-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   verify:

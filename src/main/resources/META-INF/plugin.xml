@@ -2,7 +2,11 @@
 <idea-plugin>
   <id>io.github.dlfinis.opencode.forge</id>
   <name>OpenCode Forge</name>
-  <vendor url="https://github.com/dlfinis/OpenCode_Forge" email="develop@auropia.cc.cd">Auropia</vendor>
+  <!-- The vendor url is the publisher's landing page, shown as a link in the IDE plugin
+       manager. No email on purpose: the descriptor ships inside the plugin archive and is
+       published on the Marketplace page, so an address here is harvested by scrapers. The
+       Marketplace account email is separate and private. -->
+  <vendor url="https://github.com/dlfinis/OpenCode_Forge">Auropia</vendor>
 
 
   <description><![CDATA[

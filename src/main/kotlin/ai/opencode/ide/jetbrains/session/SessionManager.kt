@@ -758,6 +758,13 @@ open class SessionManager(private val project: Project) : Disposable {
                 if (success) {
                     pendingDiffs.remove(path)
                     logger.info("[SessionManager] Accepted: $path")
+                } else if (isIgnoredByGit(path)) {
+                    // Accept applies the change to disk; staging is a convenience. `git add` refuses
+                    // an ignored path, and reporting that as a failure told the user "Failed to stage"
+                    // for a change that had in fact been written.
+                    logger.info("[SessionManager] Accepted $path (path is gitignored; staging skipped)")
+                    pendingDiffs.remove(path)
+                    success = true
                 } else {
                     // Special case: File deleted and likely untracked (git add fails with 128)
                     // If the file is gone from disk, we can consider the "delete" accepted.
@@ -777,6 +784,24 @@ open class SessionManager(private val project: Project) : Disposable {
             onComplete?.let { cb ->
                 ApplicationManager.getApplication().invokeLater { cb(success) }
             }
+        }
+    }
+
+    /**
+     * True when Git ignores [path]. `git add` refuses ignored paths, and that refusal is not a
+     * failure of the Accept action: the change has already been written to disk.
+     */
+    private fun isIgnoredByGit(path: String): Boolean {
+        return try {
+            val cmd = GeneralCommandLine("git", "check-ignore", "-q", "--", path)
+                .withWorkDirectory(project.basePath)
+            val handler = OSProcessHandler(cmd)
+            handler.startNotify()
+            val finished = handler.waitFor(3000)
+            finished && handler.exitCode == 0
+        } catch (e: Exception) {
+            logger.debug("[SessionManager] git check-ignore failed for $path: ${e.message}")
+            false
         }
     }
 

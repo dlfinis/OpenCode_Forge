@@ -2,7 +2,7 @@
 <idea-plugin>
   <id>io.github.dlfinis.opencode.forge</id>
   <name>OpenCode Forge</name>
-  <vendor url="https://github.com/dlfinis/OpenCode_UI">dlfinis</vendor>
+  <vendor url="https://github.com/dlfinis/OpenCode_Forge">dlfinis</vendor>
   
 
   <description><![CDATA[

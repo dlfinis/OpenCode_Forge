@@ -1,12 +1,12 @@
 <!-- Plugin Configuration File: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
 <idea-plugin>
-  <id>io.github.dlfinis.opencode.ui</id>
-  <name>OpenCode UI v2 (community)</name>
+  <id>io.github.dlfinis.opencode.forge</id>
+  <name>OpenCode Forge</name>
   <vendor url="https://github.com/dlfinis/OpenCode_UI">dlfinis</vendor>
   
 
   <description><![CDATA[
-    <b>OpenCode UI - AI Coding Agent for JetBrains IDEs</b><br><br>
+    <b>OpenCode Forge - AI Coding Agent for JetBrains IDEs</b><br><br>
     
     Seamlessly integrates <a href="https://opencode.ai">OpenCode</a> directly into your workflow.<br><br>
 

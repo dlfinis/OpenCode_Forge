@@ -46,9 +46,15 @@ Click the **OpenCode** icon in the right sidebar to instantly focus or create an
 
 ## Installation
 
-**Plugin URL**: https://plugins.jetbrains.com/plugin/29744-opencode-ui
+This plugin is not on the JetBrains Marketplace yet. Install it from the release archive:
 
-Open **Settings** → **Plugins** → **Marketplace** → Search "OpenCode" → **Install**
+1. Download `OpenCode_Forge-<version>.zip` from [Releases](https://github.com/dlfinis/OpenCode_Forge/releases).
+2. In your IDE open **Settings** → **Plugins** → ⚙ → **Install Plugin from Disk…**
+3. Select the archive and restart the IDE.
+
+If you already have the original **OpenCode UI** installed, it stays installed as a *separate*
+plugin: this fork declares its own id (`io.github.dlfinis.opencode.forge`) and does not upgrade the
+original in place. Uninstall the original if you do not want both.
 
 ## Usage
 

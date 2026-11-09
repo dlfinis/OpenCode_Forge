@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "ai.opencode"
-version = "1.2.3"
+version = "1.2.4"
 
 repositories {
     mavenCentral()
@@ -55,6 +55,12 @@ intellijPlatform {
         }
 
         changeNotes = """
+            <h2>1.2.4</h2>
+            <ul>
+                <li>Changed: When no OpenCode server is running, the plugin now starts the OpenCode background service instead of spawning a private server. One shared process, no generated password, and nothing typed into the terminal.</li>
+                <li>Fix: If the background service cannot start, the reason reported by the CLI is shown instead of a generic message.</li>
+                <li>Fix: Build output and IDE internals are no longer tracked as changes, which stops the plugin from reading the IDE's own index files.</li>
+            </ul>
             <h2>1.2.3</h2>
             <ul>
                 <li>Fix: Opening the OpenCode terminal no longer leaves an empty tab in the Terminal tool window or steals focus to it.</li>

@@ -21,6 +21,10 @@ repositories {
 // The default is the compatibility floor declared by sinceBuild = 252.
 val platformVersion = providers.gradleProperty("platformVersion").orElse("2025.2.4")
 
+// Optional extra verifier target, e.g. -PverifyTarget=2026.3. Each target downloads a full IDE
+// distribution, so this is limited to one and never enabled by default.
+val verifyTarget = providers.gradleProperty("verifyTarget")
+
 dependencies {
     intellijPlatform {
         intellijIdea(platformVersion.get())
@@ -92,20 +96,18 @@ intellijPlatform {
     }
 
     pluginVerification {
-        // Static compatibility check of the built plugin against each IDE's API surface.
+        // Static compatibility check of the built plugin against an IDE's API surface: it inspects
+        // the bytecode for classes and methods that no longer exist, without running the plugin.
         //
-        // Every entry downloads a full IDE distribution, so the cross-version matrix is opt-in:
-        // a local `verifyPlugin` only checks the platform already resolved by the build, while CI
-        // runs the whole range with -PverifyAllIdes.
+        // A local `verifyPlugin` checks only the platform the build already resolved, so it costs
+        // no download. Verifying against a newer release is what actually catches a removed API,
+        // and that costs a full IDE distribution, so it is opt-in through -PverifyTarget.
         //
-        // IntelliJ IDEA Community (IC) is no longer published from 2025.3 onwards: JetBrains
-        // ships a single unified distribution, so every target here is IU.
+        // IntelliJ IDEA Community (IC) is no longer published from 2025.3 onwards: JetBrains ships
+        // a single unified distribution, so every target is IU.
         ides {
             create("IU", platformVersion.get())
-            if (providers.gradleProperty("verifyAllIdes").isPresent) {
-                create("IU", "2025.3")
-                create("IU", "2026.3")
-            }
+            verifyTarget.orNull?.let { create("IU", it) }
         }
     }
 }

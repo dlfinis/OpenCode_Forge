@@ -1,27 +1,27 @@
 name: Verify compatibility
 
-# Cross-version compatibility is checked here, not on a developer machine: every
-# verifier target downloads a full IDE distribution (1.5 GB+ each).
+# Static compatibility check against an IDE's API surface: it reports classes and
+# methods that no longer exist, without running the plugin.
+#
+# On demand only. Each verifier target downloads a full IDE distribution (1.5 GB+),
+# so this never runs automatically on a push. Nothing is downloaded on a developer
+# machine: the archive lands on the ephemeral runner and is discarded with it.
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 5 * * 1'
-  push:
-    branches: [main]
-    paths:
-      - 'build.gradle.kts'
-      - 'gradle.properties'
-      - 'src/main/**'
-      - '.github/workflows/verify.yml'
+    inputs:
+      target:
+        description: 'IDE version to verify against (e.g. 2026.3)'
+        required: true
+        default: '2026.3'
 
 permissions:
   contents: read
 
 jobs:
   verify:
-    name: Verify against the supported IDE range
+    name: Verify against IntelliJ IDEA ${{ inputs.target }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
     steps:
       - name: Check out
         uses: actions/checkout@v7
@@ -38,14 +38,14 @@ jobs:
       - name: Build the plugin archive
         run: ./gradlew buildPlugin --console=plain
 
-      - name: Verify against every supported IDE
-        run: ./gradlew verifyPlugin -PverifyAllIdes --console=plain
+      - name: Verify the plugin
+        run: ./gradlew verifyPlugin -PverifyTarget=${{ inputs.target }} --console=plain
 
       - name: Upload verification reports
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: verification-reports
+          name: verification-report-${{ inputs.target }}
           path: build/reports/pluginVerifier/**
           if-no-files-found: ignore
           retention-days: 30

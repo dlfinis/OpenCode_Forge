@@ -1308,7 +1308,7 @@ class OpenCodeService(private val project: Project) : Disposable {
                 return@submit
             }
 
-            val started = runServiceStart(binary)
+            val startFailure = runServiceStart(binary)
             ServiceDiscovery.invalidateCache()
 
             val deadline = System.currentTimeMillis() + SERVICE_START_TIMEOUT_MS
@@ -1333,17 +1333,10 @@ class OpenCodeService(private val project: Project) : Disposable {
             ApplicationManager.getApplication().invokeLater {
                 if (project.isDisposed) return@invokeLater
                 if (server == null) {
-                    sendNotification(
-                        "OpenCode Service Not Available",
-                        if (started) {
-                            "The OpenCode background service did not register within " +
-                                "${SERVICE_START_TIMEOUT_MS / 1000} seconds."
-                        } else {
-                            "Could not start the OpenCode background service. Check that the " +
-                                "OpenCode CLI is installed and up to date."
-                        },
-                        NotificationType.ERROR
-                    )
+                    val reason = startFailure?.let { "Could not start the OpenCode background service: $it" }
+                        ?: ("The OpenCode background service did not register within " +
+                            "${SERVICE_START_TIMEOUT_MS / 1000} seconds.")
+                    sendNotification("OpenCode Service Not Available", reason, NotificationType.ERROR)
                     return@invokeLater
                 }
                 connectToSharedServer(server, web, customBasePath)
@@ -1351,21 +1344,35 @@ class OpenCodeService(private val project: Project) : Disposable {
         }
     }
 
-    private fun runServiceStart(binary: String): Boolean {
+    /**
+     * Runs `opencode service start`. Returns null on success, otherwise the reason to show the
+     * user. The CLI reports actionable failures - a configured port held by another process, for
+     * instance - and discarding that text leaves the user with nothing to act on.
+     */
+    private fun runServiceStart(binary: String): String? {
         return try {
             val output = CapturingProcessHandler(
                 GeneralCommandLine(binary, "service", "start")
             ).runProcess(SERVICE_START_TIMEOUT_MS.toInt())
-            if (output.isTimeout) {
-                logger.warn("[OpenCode] 'opencode service start' timed out")
-                false
-            } else {
-                logger.info("[OpenCode] 'opencode service start' exited with ${output.exitCode}")
-                output.exitCode == 0
+            when {
+                output.isTimeout ->
+                    "The OpenCode CLI did not answer within ${SERVICE_START_TIMEOUT_MS / 1000} seconds."
+                output.exitCode == 0 -> {
+                    logger.info("[OpenCode] 'opencode service start' succeeded")
+                    null
+                }
+                else -> {
+                    val detail = output.stderr.ifBlank { output.stdout }
+                        .lineSequence()
+                        .firstOrNull { it.isNotBlank() && !it.startsWith("Error:") }
+                        ?.trim()
+                    logger.warn("[OpenCode] 'opencode service start' failed: $detail")
+                    detail ?: "The OpenCode CLI exited with code ${output.exitCode}."
+                }
             }
         } catch (e: Exception) {
             logger.warn("[OpenCode] Could not run 'opencode service start'", e)
-            false
+            e.message ?: "Could not run the OpenCode CLI."
         }
     }
 

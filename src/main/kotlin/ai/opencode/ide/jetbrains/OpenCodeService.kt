@@ -1301,6 +1301,7 @@ class OpenCodeService(private val project: Project) : Disposable {
      * without restarting it.
      */
     private fun startSharedServiceAndAttach(web: Boolean, customBasePath: String?) {
+        logger.info("[OpenCode] No registered service found; asking the CLI to start the background service")
         AppExecutorUtil.getAppExecutorService().submit {
             val binary = detectOpenCodeBinary()
             if (binary == null) {
@@ -1339,6 +1340,9 @@ class OpenCodeService(private val project: Project) : Disposable {
                     sendNotification("OpenCode Service Not Available", reason, NotificationType.ERROR)
                     return@invokeLater
                 }
+                logger.info(
+                    "[OpenCode] Attached to the background service at ${server.hostname}:${server.port}"
+                )
                 connectToSharedServer(server, web, customBasePath)
             }
         }
